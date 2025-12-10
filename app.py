@@ -22,14 +22,12 @@ except ImportError:
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
 
 USER_FILE = "users.json"
+MEMBERS_FILE = "members.json" # New file for member details
 CURRENCY = "€"
 
-# CATEGORY LISTS
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
-
-# Outgoing Logic Lists
-SADAKA_SUB_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
-MEDICAL_CONDITIONS = ["Heart", "Cancer", "Kidney", "Eye", "Brain", "Bone", "Other"]
+OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
+MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
 # --- 2. AUTHENTICATION & FILE FUNCTIONS ---
 def get_user_db_file(username):
@@ -39,21 +37,20 @@ def get_user_db_file(username):
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-def load_users():
-    default_users = {"admin": hash_password("admin")}
-    if not os.path.exists(USER_FILE): return default_users
+def load_json_file(filename):
+    if not os.path.exists(filename): return {}
     try:
-        with open(USER_FILE, 'r') as f:
-            users = json.load(f)
-            if "admin" not in users: users["admin"] = hash_password("admin")
-            return users
-    except: return default_users
+        with open(filename, 'r') as f: return json.load(f)
+    except: return {}
 
-def save_user_db(users_dict):
-    with open(USER_FILE, 'w') as f: json.dump(users_dict, f)
+def save_json_file(filename, data):
+    with open(filename, 'w') as f: json.dump(data, f)
 
 def check_login(username, password):
-    users = load_users()
+    users = load_json_file(USER_FILE)
+    # Default Admin
+    if "admin" not in users: users["admin"] = hash_password("admin")
+    
     if username in users and users[username] == hash_password(password): return True
     return False
 
@@ -69,12 +66,14 @@ if not st.session_state.authenticated:
     
     with st.sidebar:
         st.header("⚙️ Admin Tools")
+        # Backup Users
         if os.path.exists(USER_FILE):
             with open(USER_FILE, "r") as f:
                 st.download_button("💾 Backup Logins", f, "users_backup.json", "application/json")
+        # Restore Users
         up_users = st.file_uploader("Restore Logins", type=['json'])
         if up_users:
-            save_user_db(json.load(up_users))
+            save_json_file(USER_FILE, json.load(up_users))
             st.success("Restored!")
 
     tabs = st.tabs(["Login", "Register"])
@@ -93,11 +92,11 @@ if not st.session_state.authenticated:
             nu = st.text_input("New Username")
             np = st.text_input("New Password", type="password")
             if st.form_submit_button("Register"):
-                users = load_users()
+                users = load_json_file(USER_FILE)
                 if nu in users: st.error("Exists")
                 else:
                     users[nu] = hash_password(np)
-                    save_user_db(users)
+                    save_json_file(USER_FILE, users)
                     st.success("Created! Please Login.")
     st.stop()
 
@@ -107,24 +106,13 @@ if not st.session_state.authenticated:
 CURRENT_DB_FILE = get_user_db_file(st.session_state.username)
 
 def load_data():
-    # Updated Schema to include SubCategory
     expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
                      "Address", "Reason", "Responsible", "Category", "SubCategory", "Medical", "Amount"]
-    
     if os.path.exists(CURRENT_DB_FILE):
         try:
             df = pd.read_csv(CURRENT_DB_FILE)
-            # FORCE MIGRATION: Add missing columns if they don't exist
-            missing = [c for c in expected_cols if c not in df.columns]
-            if missing:
-                for c in missing: df[c] = ""
-                df.to_csv(CURRENT_DB_FILE, index=False)
-            
-            # Clean NaNs
-            text_cols = ["Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "SubCategory", "Medical"]
-            for c in text_cols:
-                df[c] = df[c].fillna("")
-                
+            for col in expected_cols:
+                if col not in df.columns: df[col] = ""
             return df
         except: return pd.DataFrame(columns=expected_cols)
     return pd.DataFrame(columns=expected_cols)
@@ -132,18 +120,33 @@ def load_data():
 def save_data(df):
     df.to_csv(CURRENT_DB_FILE, index=False)
 
-def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_total):
+# --- PDF GENERATOR (UPDATED) ---
+def generate_pdf(member_name, member_details, year, dataframe, header_msg, footer_msg, grand_total):
     if not HAS_PDF: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
     styles = getSampleStyleSheet()
     
-    elements.append(Paragraph(f"Contribution Report: {member_name}", styles['Title']))
-    elements.append(Paragraph(f"Year: {year}", styles['Heading2']))
-    elements.append(Spacer(1, 12))
-    if header_msg: elements.append(Paragraph(header_msg, styles['Normal'])); elements.append(Spacer(1, 12))
+    # Title
+    elements.append(Paragraph(f"Contribution Report", styles['Title']))
+    elements.append(Spacer(1, 10))
     
+    # Member Details Block
+    elements.append(Paragraph(f"<b>Member Name:</b> {member_name}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Group:</b> {member_details.get('group', '-')}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Address:</b> {member_details.get('address', '-')}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Phone:</b> {member_details.get('phone', '-')}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Email:</b> {member_details.get('email', '-')}", styles['Normal']))
+    elements.append(Paragraph(f"<b>Report Year:</b> {year}", styles['Normal']))
+    elements.append(Spacer(1, 15))
+    
+    # Header Message
+    if header_msg:
+        elements.append(Paragraph(header_msg, styles['Italic']))
+        elements.append(Spacer(1, 12))
+    
+    # Table Data
     df_reset = dataframe.reset_index()
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
     clean_data = []
@@ -155,18 +158,38 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
         clean_data.append(clean_row)
     clean_data.append([""] * (len(clean_data[0]) - 2) + ["GRAND TOTAL:", f"{grand_total:,.2f}"])
     
+    # Table Styling
     t = Table(clean_data)
-    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.darkgreen), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.darkgreen),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+    ]))
     elements.append(t)
     elements.append(Spacer(1, 30))
-    if footer_msg: elements.append(Paragraph(footer_msg, styles['Normal']))
+    
+    # Footer Message
+    if footer_msg:
+        elements.append(Paragraph(footer_msg, styles['Normal']))
+        elements.append(Spacer(1, 30))
+    
+    # Signature
+    elements.append(Paragraph("_" * 30, styles['Normal']))
+    elements.append(Paragraph("Authorized Signature", styles['Normal']))
     
     doc.build(elements)
     buffer.seek(0)
     return buffer
 
+# Load Data
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
+
+# Load Members
+if 'members_db' not in st.session_state:
+    st.session_state.members_db = load_json_file(MEMBERS_FILE)
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -175,19 +198,29 @@ with st.sidebar:
         st.session_state.authenticated = False
         st.rerun()
     st.divider()
+    
+    # Backup Transactions
     csv = st.session_state.df.to_csv(index=False).encode('utf-8')
-    st.download_button("💾 Backup My Data", csv, f"backup_{st.session_state.username}.csv", "text/csv")
-    uploaded = st.file_uploader("Restore Data", type=['csv'])
-    if uploaded:
-        st.session_state.df = pd.read_csv(uploaded)
+    st.download_button("💾 Backup Transactions", csv, f"trans_{st.session_state.username}.csv", "text/csv")
+    
+    # Backup Members
+    mem_json = json.dumps(st.session_state.members_db)
+    st.download_button("💾 Backup Members Info", mem_json, "members.json", "application/json")
+    
+    st.markdown("---")
+    
+    # Restore
+    up_trans = st.file_uploader("Restore Transactions", type=['csv'])
+    if up_trans:
+        st.session_state.df = pd.read_csv(up_trans)
         save_data(st.session_state.df)
-        st.success("Restored!")
-        st.rerun()
-    if st.button("⚠️ Clear All Data"):
-        empty = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "SubCategory", "Medical", "Amount"])
-        save_data(empty)
-        st.session_state.df = empty
-        st.rerun()
+        st.success("Transactions Restored!")
+        
+    up_mems = st.file_uploader("Restore Members Info", type=['json'])
+    if up_mems:
+        st.session_state.members_db = json.load(up_mems)
+        save_json_file(MEMBERS_FILE, st.session_state.members_db)
+        st.success("Members Restored!")
 
 # --- DASHBOARD ---
 st.title("Charity Management System")
@@ -216,73 +249,90 @@ tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities Log", "3. Ana
 
 # === TAB 1: TRANSACTION ===
 with tab1:
-    st.subheader("New Transaction")
+    st.subheader("Transaction Management")
     
-    # TYPE SELECTION OUTSIDE FORM
-    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
-    
-    # DYNAMIC LOGIC VARIABLES (Calculated OUTSIDE the form)
-    sel_group = "N/A"
-    sel_category = ""
-    sel_sub_category = ""
-    sel_medical = ""
-    
-    # --- DYNAMIC SELECTION LOGIC ---
-    if t_type == "Outgoing":
-        st.info("ℹ️ Donation Details:")
-        
-        # 1. Group Selection
-        sel_group = st.radio("Donation Group:", ["Brother", "Sister"], horizontal=True, key="out_grp")
-        
-        # 2. Main Category Selection (Matched to Income Types)
-        sel_category = st.selectbox("Donation Category", INCOME_TYPES, key="out_cat")
-        
-        # 3. Sub-Category Logic (Only if Sadaka)
-        if sel_category == "Sadaka":
-            sel_sub_category = st.selectbox("Sadaka Type", SADAKA_SUB_TYPES, key="out_sub")
+    # --- REGISTER NEW MEMBER SECTION ---
+    with st.expander("➕ Register New Member", expanded=False):
+        with st.form("new_member_form"):
+            nm_name = st.text_input("Member Name (Full Name)")
+            nm_group = st.radio("Group", ["Brother", "Sister"], horizontal=True)
+            c1, c2, c3 = st.columns(3)
+            nm_phone = c1.text_input("Phone Number")
+            nm_email = c2.text_input("Email")
+            nm_addr = c3.text_input("Address")
             
-            # 4. Medical Logic (Only if Medical help)
-            if sel_sub_category == "Medical help":
-                med_choice = st.selectbox("Medical Condition", MEDICAL_CONDITIONS, key="out_med")
-                if med_choice == "Other":
-                    sel_medical = st.text_input("Specify Condition", key="out_med_txt")
+            if st.form_submit_button("Save New Member"):
+                if nm_name:
+                    st.session_state.members_db[nm_name] = {
+                        "group": nm_group,
+                        "phone": nm_phone,
+                        "email": nm_email,
+                        "address": nm_addr
+                    }
+                    save_json_file(MEMBERS_FILE, st.session_state.members_db)
+                    st.success(f"Member '{nm_name}' registered successfully!")
+                    st.rerun()
                 else:
-                    sel_medical = med_choice
-    
+                    st.error("Name is required.")
+
     st.markdown("---")
     
+    # --- TRANSACTION ENTRY ---
+    st.write("#### New Entry")
+    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
+    
+    # External Variables
+    category_selection = ""
+    sub_cat_selection = ""
+    medical_selection = ""
+    
+    # Outgoing Pre-Selection
+    if t_type == "Outgoing":
+        st.info("ℹ️ Donation Details:")
+        col_grp, col_cat = st.columns(2)
+        out_group = col_grp.radio("Donation Group:", ["Brother", "Sister"], horizontal=True, key="out_grp")
+        
+        category_selection = col_cat.selectbox("Donation Category", INCOME_TYPES, key="out_cat")
+        
+        if category_selection == "Sadaka":
+            sub_cat_selection = st.selectbox("Sadaka Type", ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"], key="out_sub")
+            if sub_cat_selection == "Medical help":
+                med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
+                if med_choice == "Other":
+                    medical_selection = st.text_input("Specify Condition", key="out_med_txt")
+                else:
+                    medical_selection = med_choice
+    
     with st.form("txn_form", clear_on_submit=True):
-        # Date & Amount
         c_date, c_amt = st.columns(2)
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        # Init internal vars
+        # Internal Vars
         member_name = ""
+        group = "N/A"
+        category = ""
+        sub_category = ""
+        medical = ""
         address, reason, responsible = "", "", ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
-            c1, c2, c3 = st.columns(3)
+            c1, c2 = st.columns(2)
             
-            # Group (Local scope for Incoming)
-            inc_group = c1.radio("Group", ["Brother", "Sister"], horizontal=True)
+            # Select Group to filter names
+            group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True)
             
-            # Name Logic
-            existing = sorted(df[(df['Type'] == 'Incoming') & (df['Group'] == inc_group)]['Name_Details'].unique().tolist()) if not df.empty else []
-            mode = c2.radio("Input Mode", ["Select Existing", "Type New"], horizontal=True, label_visibility="collapsed")
-            if existing and mode == "Select Existing":
-                member_name = c2.selectbox("Member Name", existing)
-            else:
-                member_name = c2.text_input("Enter Member Name")
-                
-            inc_category = c3.selectbox("Category", INCOME_TYPES)
+            # Get members from DB matching group
+            valid_members = [name for name, details in st.session_state.members_db.items() if details.get('group') == group_sel]
+            valid_members.sort()
             
-            # Assign to main variables
-            sel_group = inc_group
-            sel_category = inc_category
+            member_name = c2.selectbox("Select Member", valid_members) if valid_members else c2.text_input("Member Name (Not registered)")
             
-        else: # Outgoing Form Fields
+            category = st.selectbox("Category", INCOME_TYPES)
+            group = group_sel
+            
+        else: # Outgoing
             st.write("#### 📤 Beneficiary & Responsible")
             col_a, col_b = st.columns(2)
             member_name = col_a.text_input("Beneficiary Name")
@@ -291,27 +341,32 @@ with tab1:
             col_c, col_d = st.columns(2)
             reason = col_c.text_input("Reason / Note")
             
-            # Responsible Person
-            all_mems = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
-            resp_mode = col_d.radio("Resp. Person", ["Select Member", "Type Name"], horizontal=True, label_visibility="collapsed")
-            if all_mems and resp_mode == "Select Member":
-                responsible = col_d.selectbox("Responsible", all_mems)
-            else:
-                responsible = col_d.text_input("Responsible Name")
+            # Responsible Person (From Member DB)
+            all_mems = sorted(list(st.session_state.members_db.keys()))
+            responsible = col_d.selectbox("Responsible Person", ["Select..."] + all_mems)
+            
+            # Map external
+            category = category_selection
+            sub_category = sub_cat_selection
+            medical = medical_selection
+            group = out_group # From outside radio
         
-        # SUBMIT
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 new_row = {
-                    "ID": str(uuid.uuid4()), "Date": str(date_val), 
-                    "Year": int(date_val.year), "Month": int(date_val.month),
+                    "ID": str(uuid.uuid4()), 
+                    "Date": str(date_val), 
+                    "Year": int(date_val.year), 
+                    "Month": int(date_val.month),
                     "Type": t_type, 
-                    "Group": sel_group, 
+                    "Group": group, 
                     "Name_Details": member_name, 
-                    "Address": address, "Reason": reason, "Responsible": responsible,
-                    "Category": sel_category, 
-                    "SubCategory": sel_sub_category,
-                    "Medical": sel_medical, 
+                    "Address": address, 
+                    "Reason": reason, 
+                    "Responsible": responsible,
+                    "Category": category, 
+                    "SubCategory": sub_category,
+                    "Medical": medical, 
                     "Amount": amount
                 }
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
@@ -321,7 +376,7 @@ with tab1:
             else:
                 st.error("Name and Amount required.")
 
-    # Recent Transactions Table
+    # Recent Transactions
     if not df.empty:
         st.caption("Recent Transactions")
         recent_df = df.tail(5).iloc[::-1].copy()
@@ -350,7 +405,7 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    cols = ["Date", "Type", "Name_Details", "Category", "SubCategory", "Medical", "Address", "Responsible", "Amount"]
+    cols = ["Date", "Type", "Name_Details", "Category", "SubCategory", "Medical", "Address", "Reason", "Responsible", "Amount"]
     edited = st.data_editor(view[cols], column_config={"Amount": st.column_config.NumberColumn(format="€%.2f")}, use_container_width=True, num_rows="dynamic", key="log_edit")
     
     if st.button("Save Edits"):
@@ -384,34 +439,53 @@ with tab3:
                 st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
         else: st.warning("No data found.")
 
-# === TAB 4: REPORT ===
+# === TAB 4: MEMBER REPORT ===
 with tab4:
     st.subheader("Member Report")
+    
     c1, c2, c3 = st.columns(3)
     mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
-    mems_list = df[df['Type'] == 'Incoming']
-    if mat_grp != "All": mems_list = mems_list[mems_list['Group'] == mat_grp]
-    mems = sorted(mems_list['Name_Details'].unique())
     
-    if mems:
-        target = c2.selectbox("Select Member", mems)
+    # Filter members based on registered DB + Existing Transactions
+    reg_mems = [name for name, d in st.session_state.members_db.items() if (mat_grp == "All" or d.get('group') == mat_grp)]
+    trans_mems = df[df['Type'] == 'Incoming']
+    if mat_grp != "All": trans_mems = trans_mems[trans_mems['Group'] == mat_grp]
+    
+    # Merge and sort
+    all_visible_mems = sorted(list(set(reg_mems + trans_mems['Name_Details'].unique().tolist())))
+    
+    if all_visible_mems:
+        target = c2.selectbox("Select Member", all_visible_mems)
         tyear = c3.selectbox("Select Year", ["All"] + sorted(list(set(df['Year'].astype(str)))))
+        
+        # Display Member Details
+        mem_info = st.session_state.members_db.get(target, {})
+        with st.container():
+            st.markdown(f"### 📋 {target}")
+            mc1, mc2, mc3 = st.columns(3)
+            mc1.markdown(f"**📞 Phone:** {mem_info.get('phone', 'N/A')}")
+            mc2.markdown(f"**📧 Email:** {mem_info.get('email', 'N/A')}")
+            mc3.markdown(f"**🏠 Address:** {mem_info.get('address', 'N/A')}")
+            st.divider()
+
+        # Custom Messages
+        with st.expander("📝 Report Messages"):
+            h = st.text_area("Header", "We appreciate your generous contributions.")
+            f = st.text_area("Footer", "Please contact admin for discrepancies.")
+        
+        # Data Matrix
         mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
         if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
         
         if not mdf.empty:
             piv = mdf.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
             piv['Daily Total'] = piv.sum(axis=1)
-            gtot = piv['Daily Total'].sum()
+            g_tot = piv['Daily Total'].sum()
             st.dataframe(piv, use_container_width=True)
-            st.success(f"Grand Total: {CURRENCY}{gtot:,.2f}")
-            
-            with st.expander("PDF Options"):
-                h = st.text_area("Header", "Thanks for your contribution.")
-                f = st.text_area("Footer", "Contact admin for queries.")
+            st.success(f"Grand Total: {CURRENCY}{g_tot:,.2f}")
             
             if HAS_PDF:
-                pdf = generate_pdf(target, tyear, piv, h, f, gtot)
-                st.download_button("Download PDF", pdf, f"{target}_Report.pdf", "application/pdf")
-        else: st.info("No records.")
+                pdf = generate_pdf(target, mem_info, tyear, piv, h, f, g_tot)
+                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report.pdf", "application/pdf")
+        else: st.info("No transaction records found for this period.")
     else: st.info("No members found.")
