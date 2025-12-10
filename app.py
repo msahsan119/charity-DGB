@@ -32,7 +32,7 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
 
-# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
+# --- 2. FILE & AUTH FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -81,12 +81,14 @@ if not st.session_state.authenticated:
         with st.form("login"):
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
+            # Submit button MUST be inside the with st.form block
             if st.form_submit_button("Login"):
                 if check_login(u, p):
                     st.session_state.authenticated = True
                     st.session_state.username = u
                     st.rerun()
                 else: st.error("Invalid credentials")
+                
     with tabs[1]:
         with st.form("reg"):
             nu = st.text_input("New Username")
@@ -120,7 +122,7 @@ def load_data():
 def save_data(df):
     df.to_csv(CURRENT_DB_FILE, index=False)
 
-# PDF Generator (UPDATED with 2nd Table)
+# PDF Generator
 def generate_pdf(member_name, member_details, year, dataframe, header_msg, footer_msg, grand_total, monthly_summary):
     if not HAS_PDF: return None
     buffer = io.BytesIO()
@@ -128,7 +130,6 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements = []
     styles = getSampleStyleSheet()
     
-    # 1. Header Info
     elements.append(Paragraph(f"Contribution Report", styles['Title']))
     elements.append(Spacer(1, 10))
     elements.append(Paragraph(f"<b>Member:</b> {member_name} | <b>Year:</b> {year}", styles['Normal']))
@@ -137,7 +138,7 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     
     if header_msg: elements.append(Paragraph(header_msg, styles['Italic'])); elements.append(Spacer(1, 12))
     
-    # 2. Main Transaction Table
+    # Detail Table
     elements.append(Paragraph("Detailed Transactions", styles['Heading3']))
     df_reset = dataframe.reset_index()
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
@@ -155,25 +156,19 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements.append(t)
     elements.append(Spacer(1, 20))
 
-    # 3. Monthly Summary Table (New Requirement)
+    # Monthly Summary Table
     elements.append(Paragraph("Monthly Summary", styles['Heading3']))
-    # Prepare monthly data
     summary_data = [["Month", "Total Amount"]]
     for index, row in monthly_summary.iterrows():
-        month_name = MONTH_NAMES[int(row['Month'])-1]
-        summary_data.append([month_name, f"{row['Amount']:,.2f}"])
+        m_idx = int(row['Month']) - 1
+        m_name = MONTH_NAMES[m_idx] if 0 <= m_idx < 12 else str(row['Month'])
+        summary_data.append([m_name, f"{row['Amount']:,.2f}"])
     
     t2 = Table(summary_data, colWidths=[150, 100], hAlign='LEFT')
-    t2.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.navy),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-        ('ALIGN', (1,1), (-1,-1), 'RIGHT')
-    ]))
+    t2.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.navy), ('TEXTCOLOR', (0,0), (-1,0), colors.white), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
     elements.append(t2)
     elements.append(Spacer(1, 30))
 
-    # 4. Footer & Signature
     if footer_msg: elements.append(Paragraph(footer_msg, styles['Normal'])); elements.append(Spacer(1, 30))
     elements.append(Paragraph("_" * 30, styles['Normal'])); elements.append(Paragraph("Authorized Signature", styles['Normal']))
     
@@ -195,7 +190,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    # Danger Zone
     st.error("⚠️ Danger Zone")
     csv_backup = st.session_state.df.to_csv(index=False).encode('utf-8')
     st.download_button("1️⃣ Download Data First", csv_backup, f"archive_{st.session_state.username}_{datetime.now().strftime('%Y-%m-%d')}.csv", "text/csv")
@@ -231,14 +225,13 @@ st.title("Charity Management System")
 df = st.session_state.df
 curr_yr = int(datetime.now().year)
 
+tot_inc = 0.0; yr_inc = 0.0; tot_don = 0.0; yr_don = 0.0
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
     yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
     tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
     yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
-else:
-    tot_inc = yr_inc = tot_don = yr_don = 0.0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
@@ -274,7 +267,8 @@ with tab1:
     st.markdown("---")
     st.write("#### New Entry")
     
-    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True)
+    # EXTERNAL SELECTORS (IMPORTANT: Must be outside the form to update dynamically)
+    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="main_type_radio")
     
     sel_group = "N/A"
     sel_category = ""
@@ -292,7 +286,10 @@ with tab1:
             sub_cat_selection = st.selectbox("Sadaka Type", ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"], key="out_sub")
             if sub_cat_selection == "Medical help":
                 med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
-                sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
+                if med_choice == "Other":
+                    sel_medical = st.text_input("Specify", key="out_med_txt")
+                else:
+                    sel_medical = med_choice
     
     with st.form("txn_form", clear_on_submit=True):
         c_date, c_amt = st.columns(2)
@@ -319,8 +316,9 @@ with tab1:
             reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            category, sub_category, medical, group = category_selection, sub_cat_selection, sel_medical, out_group
+            category, sub_category, medical, group = category_selection, sub_cat_selection, sel_medical, out_grp
         
+        # SUBMIT BUTTON MUST BE INDENTED HERE
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 new_row = {
@@ -404,10 +402,9 @@ with tab3:
                     fig_med = px.pie(med_df, values='Amount', names='Medical', title="Medical Conditions")
                     st.plotly_chart(fig_med, use_container_width=True)
                 else: st.info("No Medical donations.")
-        else:
-            st.info("No donations recorded yet.")
+        else: st.info("No donations.")
 
-# === TAB 4: MEMBER REPORT ===
+# === TAB 4: REPORT ===
 with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
@@ -435,20 +432,20 @@ with tab4:
             st.dataframe(piv, use_container_width=True)
             st.success(f"Grand Total: {CURRENCY}{g_tot:,.2f}")
             
-            # Prepare monthly summary for PDF
+            # Prepare Monthly Summary for PDF
             monthly_sum = mdf.groupby('Month')['Amount'].sum().reset_index()
             
             with st.expander("PDF Options"):
-                h = st.text_area("Header", "We appreciate your contribution.")
-                f = st.text_area("Footer", "Contact admin for queries.")
+                h = st.text_area("Header", "We appreciate your generous contributions.")
+                f = st.text_area("Footer", "Please contact admin for discrepancies.")
             
             if HAS_PDF:
                 pdf = generate_pdf(target, mem_info, tyear, piv, h, f, g_tot, monthly_sum)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report.pdf", "application/pdf")
-        else: st.info("No transactions found.")
+        else: st.info("No transaction records found.")
     else: st.info("No members found.")
 
-# === TAB 5: OVERALL SUMMARY (NEW) ===
+# === TAB 5: OVERALL SUMMARY ===
 with tab5:
     st.subheader("Overall Monthly Summary")
     
@@ -456,41 +453,25 @@ with tab5:
     
     if sum_year:
         year_df = df[df['Year'] == int(sum_year)]
-        
-        # Group by Month and Type
         monthly_stats = year_df.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
         
-        # Ensure columns exist
         if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
         if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
         
-        # Format Table
         summary_table = []
-        total_inc, total_don, total_bal = 0, 0, 0
+        t_in, t_out, t_bal = 0, 0, 0
         
         for m_num in range(1, 13):
             inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
             don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
             bal = inc - don
-            
-            summary_table.append({
-                "Month": MONTH_NAMES[m_num-1],
-                "Income": inc,
-                "Donation": don,
-                "Balance": bal
-            })
-            
-            total_inc += inc
-            total_don += don
-            total_bal += bal
+            summary_table.append({"Month": MONTH_NAMES[m_num-1], "Income": inc, "Donation": don, "Balance": bal})
+            t_in += inc; t_out += don; t_bal += bal
             
         sum_df = pd.DataFrame(summary_table)
-        
-        # Styling
         st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
         
-        # Totals Row
         c1, c2, c3 = st.columns(3)
-        c1.metric("Year Income", f"€{total_inc:,.2f}")
-        c2.metric("Year Donation", f"€{total_don:,.2f}")
-        c3.metric("Net Balance", f"€{total_bal:,.2f}")
+        c1.metric("Year Income", f"€{t_in:,.2f}")
+        c2.metric("Year Donation", f"€{t_out:,.2f}")
+        c3.metric("Net Balance", f"€{t_bal:,.2f}")
