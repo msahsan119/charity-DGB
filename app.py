@@ -9,7 +9,7 @@ from datetime import datetime
 import plotly.express as px
 import matplotlib.pyplot as plt
 
-# --- REPORTLAB IMPORTS (For PDF) ---
+# --- REPORTLAB IMPORTS ---
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -20,7 +20,7 @@ try:
 except ImportError:
     HAS_PDF = False
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
 
 USER_FILE = "users.json"
@@ -33,7 +33,7 @@ MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 
-# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
+# --- FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -56,7 +56,7 @@ def check_login(username, password):
     if username in users and users[username] == hash_password(password): return True
     return False
 
-# --- 3. SESSION INIT ---
+# --- SESSION INIT ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'show_reset_confirm' not in st.session_state: st.session_state.show_reset_confirm = False
@@ -128,7 +128,7 @@ def get_fund_balance(df, fund_category):
     expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
     return income - expense
 
-# --- ADVANCED PDF GENERATOR ---
+# PDF Generator
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
                  df_member_year, df_global_year, medical_df, header_msg, footer_msg):
     
@@ -138,14 +138,11 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements = []
     styles = getSampleStyleSheet()
     
-    # Custom Styles
     styles.add(ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12))
 
-    # 1. Title
     elements.append(Paragraph(f"Member Contribution Report", styles['Title']))
     elements.append(Spacer(1, 10))
 
-    # 2. Member Profile
     profile_text = [
         f"<b>Name:</b> {member_name}",
         f"<b>Member Since:</b> {member_since}",
@@ -157,19 +154,15 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(Paragraph(line, styles['Normal']))
     
     elements.append(Spacer(1, 10))
-    # Highlight Total
     elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", styles['Highlight']))
     elements.append(Spacer(1, 15))
     
-    # 3. Appreciation Box
     if header_msg:
         elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
         elements.append(Spacer(1, 15))
 
-    # 4. Table 1: Member's Monthly Contributions
+    # Table 1
     elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
-    
-    # Group Member Data by Month
     mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
     t1_data = [["Month", "Amount"]]
     t1_total = 0
@@ -179,20 +172,18 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         t1_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
         t1_total += amt
     t1_data.append(["TOTAL", f"{t1_total:,.2f}"])
-
     t1 = Table(t1_data, colWidths=[200, 150], hAlign='LEFT')
     t1.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.darkgreen),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('GRID', (0,0), (-1,-1), 1, colors.black),
-        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'), # Bold total
+        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
     ]))
     elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # 5. Table 2: Charity Overall Spending
+    # Table 2
     elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
-    
     global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
     t2_data = [["Month", "Total Distributed"]]
     t2_total = 0
@@ -202,7 +193,6 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         t2_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
         t2_total += amt
     t2_data.append(["TOTAL", f"{t2_total:,.2f}"])
-
     t2 = Table(t2_data, colWidths=[200, 150], hAlign='LEFT')
     t2.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.navy),
@@ -213,29 +203,21 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t2)
     elements.append(Spacer(1, 20))
 
-    # 6. Pie Chart (Medical Analysis)
+    # Chart
     if not medical_df.empty:
         elements.append(Paragraph(f"<b>3. Medical Aid Analysis ({year})</b>", styles['Heading3']))
-        
-        # Create Plot with Matplotlib
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
-        
         if not med_stats.empty:
             plt.figure(figsize=(4, 3))
             plt.pie(med_stats, labels=med_stats.index, autopct='%1.1f%%', startangle=140, textprops={'fontsize': 8})
             plt.title("Medical Donation Distribution", fontsize=10)
-            
-            # Save to buffer
             img_buf = io.BytesIO()
             plt.savefig(img_buf, format='png', bbox_inches='tight')
             img_buf.seek(0)
             plt.close()
-            
-            # Insert into PDF
             elements.append(Image(img_buf, width=4*inch, height=3*inch))
             elements.append(Spacer(1, 20))
 
-    # 7. Footer & Signature
     if footer_msg:
         elements.append(Paragraph(footer_msg, styles['Normal']))
         elements.append(Spacer(1, 30))
@@ -348,6 +330,7 @@ with tab1:
     
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
+    # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
     
     if t_type == "Outgoing":
@@ -369,7 +352,9 @@ with tab1:
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        member_name, address, reason, responsible = "", "", "", ""
+        # --- FIXED INITIALIZATION ---
+        member_name = ""; address = ""; reason = ""; responsible = ""
+        category = ""; sub_category = ""; medical = ""; group = ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -380,6 +365,11 @@ with tab1:
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
             category = st.selectbox("Category", INCOME_TYPES)
             group = group_sel
+            
+            # Empty fields for Incoming
+            sub_category = ""
+            medical = ""
+            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
@@ -389,7 +379,12 @@ with tab1:
             reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            category, sub_category, medical, group = sel_category, sel_sub_category, sel_medical, out_grp
+            
+            # Map external variables to internal
+            category = sel_category
+            sub_category = sel_sub_category
+            medical = sel_medical
+            group = out_grp
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if t_type == "Outgoing" and amount > current_balance:
@@ -478,12 +473,9 @@ with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
     mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
-    
-    # Combine registered members and transaction members
     reg_mems = [n for n, d in st.session_state.members_db.items() if (mat_grp == "All" or d.get('group') == mat_grp)]
     trans_mems = df[df['Type'] == 'Incoming']
     if mat_grp != "All": trans_mems = trans_mems[trans_mems['Group'] == mat_grp]
-    
     all_visible_mems = sorted(list(set(reg_mems + trans_mems['Name_Details'].unique().tolist())))
     
     if all_visible_mems:
@@ -495,7 +487,6 @@ with tab4:
         lifetime_total = all_time_df['Amount'].sum()
         mem_since = all_time_df['Date'].min() if not all_time_df.empty else "N/A"
         
-        # Display Top Section
         st.markdown(f"## 👤 {target}")
         i1, i2, i3 = st.columns(3)
         i1.info(f"**Member Since:** {mem_since}")
@@ -506,44 +497,32 @@ with tab4:
 
         st.divider()
         
-        # PDF Message Input
-        with st.expander("📝 PDF Messages"):
-            h = st.text_area("Appreciation", "Thank you for your generous support.")
-            f = st.text_area("Footer", "Please contact us for any corrections.")
+        with st.expander("PDF Options"):
+            h = st.text_area("Header", "We appreciate your generous contributions.")
+            f = st.text_area("Footer", "Please contact admin for discrepancies.")
 
-        # --- DATA PROCESSING FOR PDF ---
-        # 1. Member Year Data
         if tyear == "All":
             year_df = all_time_df
-            year_filter = None
+            global_out_year = df[df['Type'] == 'Outgoing']
+            medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
         else:
             year_filter = int(tyear)
             year_df = all_time_df[all_time_df['Year'] == year_filter]
-            
-        # 2. Global Outgoing Data (For Table 2)
-        if year_filter:
             global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
-        else:
-            global_out_year = df[df['Type'] == 'Outgoing']
-            medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
 
-        # Display and Generate
         if not year_df.empty:
             st.markdown(f"#### 📅 Contributions in {tyear}")
             st.dataframe(year_df[["Date", "Category", "Amount"]], use_container_width=True)
-            
             year_total = year_df['Amount'].sum()
             st.success(f"**Total for {tyear}: {CURRENCY}{year_total:,.2f}**")
             
             if HAS_PDF:
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
                                    year_df, global_out_year, medical_df_year, h, f)
-                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
-            else:
-                st.warning("ReportLab library missing.")
-        else:
-            st.info(f"No contributions found for {tyear}.")
+                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf")
+            else: st.warning("ReportLab missing.")
+        else: st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
 
 # === TAB 5: OVERALL SUMMARY ===
@@ -554,13 +533,11 @@ with tab5:
     if sum_year:
         year_df = df[df['Year'] == int(sum_year)]
         monthly_stats = year_df.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
-        
         if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
         if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
         
         summary_table = []
         t_in, t_out, t_bal = 0, 0, 0
-        
         for m_num in range(1, 13):
             inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
             don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
@@ -570,7 +547,6 @@ with tab5:
             
         sum_df = pd.DataFrame(summary_table)
         st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
-        
         c1, c2, c3 = st.columns(3)
         c1.metric("Year Income", f"€{t_in:,.2f}")
         c2.metric("Year Donation", f"€{t_out:,.2f}")
