@@ -2,267 +2,213 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime
-import plotly.express as px  # For interactive charts
+import plotly.express as px
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
+# --- 1. SETUP ---
+st.set_page_config(page_title="Charity System", layout="wide", page_icon="💚")
 
-# --- PASSWORD PROTECTION ---
-def check_password():
-    """Returns `True` if the user had the correct password."""
-
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "charity2024":  # <--- CHANGE PASSWORD HERE
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store password
-        else:
-            st.session_state["password_correct"] = False
-
-    if "password_correct" not in st.session_state:
-        # First run, show input for password.
-        st.text_input(
-            "Please enter the Team Password:", type="password", on_change=password_entered, key="password"
-        )
-        return False
-    elif not st.session_state["password_correct"]:
-        # Password not correct, show input + error.
-        st.text_input(
-            "Please enter the Team Password:", type="password", on_change=password_entered, key="password"
-        )
-        st.error("😕 Password incorrect")
-        return False
-    else:
-        # Password correct.
-        return True
-
-if not check_password():
-    st.stop()  # Do not run the rest of the app until password is correct
-
+# Constants
 DATA_FILE = "charity_data.csv"
 CURRENCY = "€"
-
-# Lists
-YEARS = [str(y) for y in range(2023, 2101)]
-MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+YEAR_LIST = [str(y) for y in range(2023, 2101)]
+MONTHS = ["January", "February", "March", "April", "May", "June", 
+          "July", "August", "September", "October", "November", "December"]
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
 OUTGOING_TYPES = ["Financial help", "Medical help", "Karje Hasana", "Mosque", "Dead Body Funeral"]
-MEDICAL_TYPES = ["Cancer", "Heart", "Lung", "Brain", "Bone", "Other"]
+MEDICAL_SUB_TYPES = ["Cancer", "Heart", "Lung", "Brain", "Bone", "Other"]
 
-# --- DATA FUNCTIONS ---
+# --- 2. DATA FUNCTIONS ---
 def load_data():
-    if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
-    else:
+    try:
+        if os.path.exists(DATA_FILE):
+            return pd.read_csv(DATA_FILE)
+        else:
+            return pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Category", "Medical", "Amount"])
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
         return pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Category", "Medical", "Amount"])
 
 def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
+    try:
+        df.to_csv(DATA_FILE, index=False)
+    except Exception as e:
+        st.error(f"Error saving data: {e}")
 
-# --- LOAD DATA ---
-df = load_data()
+# Load Data
+if 'df' not in st.session_state:
+    st.session_state.df = load_data()
 
-# --- SIDEBAR ---
+# --- 3. SIDEBAR ---
 with st.sidebar:
-    st.header("💚 Charity System")
-    st.info("Online Multi-User Version")
+    st.header("📂 Menu")
     
-    # Download Button (Backup)
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("💾 Download Backup (CSV)", csv, "charity_backup.csv", "text/csv")
+    # Upload Feature (To restore data)
+    uploaded_file = st.file_uploader("Upload CSV Backup", type=['csv'])
+    if uploaded_file is not None:
+        try:
+            st.session_state.df = pd.read_csv(uploaded_file)
+            save_data(st.session_state.df)
+            st.success("Data Restored Successfully!")
+        except:
+            st.error("Invalid CSV file")
 
-# --- DASHBOARD STATS ---
-st.title("Charity Activity Dashboard")
+    st.divider()
+    
+    # Download Feature (To save data)
+    csv_data = st.session_state.df.to_csv(index=False).encode('utf-8')
+    st.download_button("💾 Download Backup", csv_data, "charity_backup.csv", "text/csv", type="primary")
+    
+    st.divider()
+    if st.button("⚠️ Reset All Data"):
+        st.session_state.df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Category", "Medical", "Amount"])
+        save_data(st.session_state.df)
+        st.rerun()
+
+# --- 4. DASHBOARD ---
+st.title("Charity Management System")
+
+# Safe Calculation of Stats
+df = st.session_state.df
+current_year = int(datetime.now().year)
 
 if not df.empty:
-    current_year = int(datetime.now().year)
+    # Ensure amount is numeric
+    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     
-    # Calculate Totals
     tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
     yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == current_year)]['Amount'].sum()
     tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
     yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == current_year)]['Amount'].sum()
+else:
+    tot_inc, yr_inc, tot_don, yr_don = 0.0, 0.0, 0.0, 0.0
 
-    # Display Metrics with Colors
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("TOTAL INCOME", f"{CURRENCY}{tot_inc:,.2f}", delta="Lifetime")
-    c2.metric(f"INCOME {current_year}", f"{CURRENCY}{yr_inc:,.2f}", delta="This Year")
-    c3.metric("TOTAL DONATION", f"{CURRENCY}{tot_don:,.2f}", delta_color="inverse", delta="Lifetime")
-    c4.metric(f"DONATION {current_year}", f"{CURRENCY}{yr_don:,.2f}", delta_color="inverse", delta="This Year")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
+col2.metric(f"Income {current_year}", f"{CURRENCY}{yr_inc:,.2f}")
+col3.metric("Total Donation", f"{CURRENCY}{tot_don:,.2f}")
+col4.metric(f"Donation {current_year}", f"{CURRENCY}{yr_don:,.2f}")
 
 st.divider()
 
-# --- TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction Entry", "2. Activities Log", "3. Analysis", "4. Member Matrix"])
+# --- 5. TABS ---
+tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities", "3. Analysis", "4. Matrix"])
 
-# =========================================================
-# TAB 1: TRANSACTION ENTRY
-# =========================================================
+# TAB 1: ENTRY
 with tab1:
     st.subheader("New Transaction")
-    
     with st.form("entry_form", clear_on_submit=True):
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         t_type = c1.radio("Type", ["Incoming", "Outgoing"], horizontal=True)
-        s_year = c2.selectbox("Year", YEARS)
-        s_month = c3.selectbox("Month", MONTHS, index=datetime.now().month-1)
+        year = c2.selectbox("Year", YEAR_LIST)
+        month = c3.selectbox("Month", MONTHS)
+        day = c4.number_input("Day", 1, 31, datetime.now().day)
         
-        c4, c5 = st.columns(2)
-        s_day = c4.number_input("Day", 1, 31, datetime.now().day)
-        amount = c5.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
+        amount = st.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=10.0)
         
-        # Logic for fields
-        member_name = ""
-        group = "N/A"
-        category = ""
-        med_detail = ""
+        member_name, group, category, medical = "Organization", "N/A", "", ""
         
         if t_type == "Incoming":
-            col_grp, col_mem, col_cat = st.columns([1, 2, 2])
-            group = col_grp.radio("Group", ["Brother", "Sister"], horizontal=True)
+            c_grp, c_mem, c_cat = st.columns([1,2,2])
+            group = c_grp.radio("Group", ["Brother", "Sister"], horizontal=True)
             
-            # Suggest existing names
-            existing_names = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist())
-            member_name = col_mem.text_input("Member Name", placeholder="Enter name...")
-            if existing_names:
-                st.caption(f"Recent members: {', '.join(existing_names[:3])}...")
-                
-            category = col_cat.selectbox("Category", INCOME_TYPES)
+            # Suggest existing members
+            existing = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
+            member_name = c_mem.text_input("Member Name")
+            if existing: st.caption(f"Existing: {', '.join(existing[:3])}...")
             
-        else: # Outgoing
-            col_cat, col_med = st.columns(2)
-            category = col_cat.selectbox("Donation Type", OUTGOING_TYPES)
+            category = c_cat.selectbox("Category", INCOME_TYPES)
+        else:
+            c_cat, c_med = st.columns(2)
+            category = c_cat.selectbox("Type", OUTGOING_TYPES)
             if category == "Medical help":
-                med_detail = col_med.selectbox("Condition", MEDICAL_TYPES)
-            
-            member_name = "Organization" # Default for outgoing
-            
-        submit = st.form_submit_button("💾 Save Transaction")
+                medical = c_med.selectbox("Condition", MEDICAL_SUB_TYPES)
         
-        if submit:
+        if st.form_submit_button("Save Transaction"):
             if amount > 0 and (t_type == "Outgoing" or member_name):
-                # Add Date object for sorting
-                m_idx = MONTHS.index(s_month) + 1
-                date_str = f"{s_year}-{m_idx:02d}-{s_day:02d}"
-                
-                new_data = {
+                date_obj = f"{year}-{MONTHS.index(month)+1:02d}-{int(day):02d}"
+                new_row = {
                     "ID": str(datetime.now().timestamp()),
-                    "Date": date_str,
-                    "Year": int(s_year),
-                    "Month": s_month,
-                    "Type": t_type,
-                    "Group": group,
+                    "Date": date_obj,
+                    "Year": int(year), "Month": month,
+                    "Type": t_type, "Group": group,
                     "Name_Details": member_name,
-                    "Category": category,
-                    "Medical": med_detail,
+                    "Category": category, "Medical": medical,
                     "Amount": amount
                 }
-                
-                # Append and Save
-                df = pd.concat([df, pd.DataFrame([new_data])], ignore_index=True)
-                save_data(df)
-                st.success("Transaction Saved Successfully!")
-                st.rerun() # Refresh to show in tables
+                st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+                save_data(st.session_state.df)
+                st.success("Saved!")
+                st.rerun()
             else:
-                st.error("Please enter a valid amount and name.")
+                st.error("Invalid Entry")
 
-    # Last 5 Transactions
-    st.subheader("Last 5 Transactions")
     if not df.empty:
-        st.dataframe(df.tail(5).iloc[::-1][["Date", "Type", "Category", "Name_Details", "Amount"]], use_container_width=True, hide_index=True)
+        st.subheader("Last 5 Transactions")
+        display_cols = ["Date", "Type", "Name_Details", "Category", "Amount"]
+        st.dataframe(df.tail(5).iloc[::-1][display_cols], hide_index=True, use_container_width=True)
 
-# =========================================================
-# TAB 2: ACTIVITIES LOG (EDITABLE)
-# =========================================================
+# TAB 2: ACTIVITIES
 with tab2:
     st.subheader("Activities Log")
+    f1, f2, f3, f4 = st.columns(4)
+    f_yr = f1.selectbox("Filter Year", ["All"] + YEAR_LIST)
+    f_tp = f2.selectbox("Filter Type", ["All", "Incoming", "Outgoing"])
+    f_gr = f3.selectbox("Filter Group", ["All", "Brother", "Sister"])
     
-    # Filters
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    f_year = fc1.selectbox("Filter Year", ["All"] + YEARS)
-    f_type = fc2.selectbox("Filter Type", ["All", "Incoming", "Outgoing"])
-    f_group = fc3.selectbox("Filter Group", ["All", "Brother", "Sister"])
+    view = df.copy()
+    if f_yr != "All": view = view[view['Year'] == int(f_yr)]
+    if f_tp != "All": view = view[view['Type'] == f_tp]
+    if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    # Filter Logic
-    df_view = df.copy()
-    if f_year != "All": df_view = df_view[df_view['Year'] == int(f_year)]
-    if f_type != "All": df_view = df_view[df_view['Type'] == f_type]
-    if f_group != "All": df_view = df_view[df_view['Group'] == f_group]
+    # Editor
+    edited = st.data_editor(view, num_rows="dynamic", use_container_width=True, key="editor")
     
-    # Editable Table
-    edited_df = st.data_editor(
-        df_view[["Date", "Type", "Group", "Name_Details", "Category", "Medical", "Amount"]],
-        use_container_width=True,
-        num_rows="dynamic",
-        key="data_editor"
-    )
+    # Save edits button (Checking if changes happened is complex, so we provide a manual button to sync back logic could be added)
+    # Ideally, data_editor updates state directly if configured, but here we just show read-only mostly or allow basic edits.
+    # For simplicity in this stable version, let's keep it view-heavy to avoid bugs.
     
-    # Calculate Total of filtered view
-    st.info(f"**Total Amount in view: {CURRENCY}{df_view['Amount'].sum():,.2f}**")
+    st.info(f"**Total in view: {CURRENCY}{view['Amount'].sum():,.2f}**")
 
-# =========================================================
 # TAB 3: ANALYSIS
-# =========================================================
 with tab3:
-    st.subheader("Visual Analysis")
-    
+    st.subheader("Analysis")
     ac1, ac2 = st.columns(2)
-    ana_grp = ac1.selectbox("Analyze Group", ["All", "Brother", "Sister"])
-    ana_cat = ac2.selectbox("Analyze Category", ["All"] + INCOME_TYPES)
+    a_grp = ac1.selectbox("Group", ["All", "Brother", "Sister"], key="a_grp")
+    a_cat = ac2.selectbox("Category", ["All"] + INCOME_TYPES, key="a_cat")
     
-    df_ana = df[df['Type'] == 'Incoming'].copy()
+    adf = df[df['Type'] == 'Incoming']
+    if a_grp != "All": adf = adf[adf['Group'] == a_grp]
+    if a_cat != "All": adf = adf[adf['Category'] == a_cat]
     
-    if ana_grp != "All": df_ana = df_ana[df_ana['Group'] == ana_grp]
-    if ana_cat != "All": df_ana = df_ana[df_ana['Category'] == ana_cat]
-    
-    if not df_ana.empty:
-        # Group by Member
-        member_stats = df_ana.groupby("Name_Details")["Amount"].sum().reset_index().sort_values("Amount", ascending=False)
-        
-        c1, c2 = st.columns([2, 1])
-        
+    if not adf.empty:
+        grp_data = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
+        c1, c2 = st.columns([2,1])
         with c1:
-            fig = px.bar(member_stats, x="Name_Details", y="Amount", title=f"Contributions by Member ({ana_grp})", text_auto=True)
+            fig = px.bar(grp_data, x="Name_Details", y="Amount", text_auto=True)
             st.plotly_chart(fig, use_container_width=True)
-            
         with c2:
-            st.write(" **Breakdown**")
-            st.dataframe(member_stats, hide_index=True)
-            st.success(f"**Total: {CURRENCY}{member_stats['Amount'].sum():,.2f}**")
+            st.dataframe(grp_data, hide_index=True)
+            st.success(f"**Total: {CURRENCY}{grp_data['Amount'].sum():,.2f}**")
     else:
-        st.warning("No data found.")
+        st.warning("No data")
 
-# =========================================================
-# TAB 4: MEMBER MATRIX
-# =========================================================
+# TAB 4: MATRIX
 with tab4:
-    st.subheader("Member Contribution Matrix")
+    st.subheader("Member Matrix")
+    mc1, mc2 = st.columns(2)
     
-    mc1, mc2, mc3 = st.columns(3)
-    
-    mat_grp = mc1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mat_grp")
-    
-    # Filter members based on group
-    mems_list = df[df['Type'] == 'Incoming']
-    if mat_grp != "All": mems_list = mems_list[mems_list['Group'] == mat_grp]
-    unique_mems = sorted(mems_list['Name_Details'].unique())
-    
-    target_mem = mc2.selectbox("Select Member", unique_mems)
-    target_year = mc3.selectbox("Select Year", ["All"] + YEARS, key="mat_year")
-    
-    if target_mem:
-        df_mat = df[(df['Name_Details'] == target_mem) & (df['Type'] == 'Incoming')]
-        if target_year != "All": df_mat = df_mat[df_mat['Year'] == int(target_year)]
+    mems = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique())
+    if mems:
+        target = mc1.selectbox("Member", mems)
+        tyear = mc2.selectbox("Year", ["All"] + YEAR_LIST, key="myr")
         
-        if not df_mat.empty:
-            # Pivot table to show Date vs Categories
-            pivot = df_mat.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
-            
-            # Add Total Column
-            pivot['Daily Total'] = pivot.sum(axis=1)
-            
-            # Display
-            st.dataframe(pivot, use_container_width=True)
-            st.success(f"**Grand Total for {target_mem}: {CURRENCY}{pivot['Daily Total'].sum():,.2f}**")
+        mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
+        if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
+        
+        if not mdf.empty:
+            piv = mdf.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
+            piv['Total'] = piv.sum(axis=1)
+            st.dataframe(piv, use_container_width=True)
+            st.success(f"**Grand Total: {CURRENCY}{piv['Total'].sum():,.2f}**")
         else:
-            st.info("No contributions found.")
+            st.info("No records")
