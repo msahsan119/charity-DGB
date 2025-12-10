@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 import plotly.express as px
 
-# --- REPORTLAB IMPORTS ---
+# --- REPORTLAB IMPORTS (For PDF) ---
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -21,123 +21,117 @@ except ImportError:
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
 
-# FILES
-USER_FILE = "users.json"
-# We define the current DB file later based on login
-
-# LISTS
 CURRENCY = "€"
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
 MONTHS = ["January", "February", "March", "April", "May", "June", 
           "July", "August", "September", "October", "November", "December"]
+
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
 OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
-# --- 2. AUTHENTICATION & FUNCTIONS ---
-
-def get_user_db_file(username):
-    # Sanitize username for filename
-    clean_name = "".join(x for x in username if x.isalnum())
-    return f"data_{clean_name}.csv"
+# --- 2. AUTHENTICATION LOGIC ---
 
 def hash_password(password):
     return hashlib.sha256(str.encode(password)).hexdigest()
 
-def load_users():
-    # Default Admin (Always exists)
-    default_users = {"admin": hash_password("admin")}
-    
-    if not os.path.exists(USER_FILE):
-        return default_users
-    try:
-        with open(USER_FILE, 'r') as f:
-            loaded_users = json.load(f)
-            # Ensure admin always exists even in loaded file
-            if "admin" not in loaded_users:
-                loaded_users["admin"] = hash_password("admin")
-            return loaded_users
-    except:
-        return default_users
-
-def save_user_db(users_dict):
-    with open(USER_FILE, 'w') as f:
-        json.dump(users_dict, f)
+# Load users into Session State to keep them alive during the session
+if 'user_db' not in st.session_state:
+    # Default Admin
+    st.session_state.user_db = {"admin": hash_password("admin")}
 
 def check_login(username, password):
-    users = load_users()
+    users = st.session_state.user_db
     if username in users and users[username] == hash_password(password):
         return True
     return False
 
-# --- 3. SESSION STATE INITIALIZATION ---
+def register_user(username, password):
+    if username in st.session_state.user_db:
+        return False
+    st.session_state.user_db[username] = hash_password(password)
+    return True
+
+# --- 3. SESSION STATE INIT ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'username' not in st.session_state:
     st.session_state.username = ""
 
 # =========================================================
-# LOGIN SCREEN (BLOCKING)
+# LOGIN SCREEN
 # =========================================================
 if not st.session_state.authenticated:
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.title("🔒 Charity System Login")
-        
-        tab_login, tab_reg = st.tabs(["Login", "Register New User"])
-        
-        with tab_login:
-            with st.form("login_form"):
-                user_in = st.text_input("Username")
-                pass_in = st.text_input("Password", type="password")
-                submit_login = st.form_submit_button("Login")
-                
-                if submit_login:
-                    if check_login(user_in, pass_in):
-                        st.session_state.authenticated = True
-                        st.session_state.username = user_in
-                        st.success("Login Successful!")
-                        st.rerun()
-                    else:
-                        st.error("Invalid Username or Password")
-                        
-        with tab_reg:
-            with st.form("reg_form"):
-                st.caption("Create a separate database for a new user.")
-                new_user = st.text_input("New Username")
-                new_pass = st.text_input("New Password", type="password")
-                submit_reg = st.form_submit_button("Create Account")
-                
-                if submit_reg:
-                    users = load_users()
-                    if new_user in users:
-                        st.error("Username already exists.")
-                    elif len(new_user) < 3 or len(new_pass) < 3:
-                        st.error("Username/Password too short.")
-                    else:
-                        users[new_user] = hash_password(new_pass)
-                        save_user_db(users)
-                        st.success("User created! Go to Login tab.")
+    st.title("🔒 Charity System Login")
     
-    # Stop execution here if not logged in
-    st.stop()
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("### 🔑 Login")
+        with st.form("login_form"):
+            user_in = st.text_input("Username")
+            pass_in = st.text_input("Password", type="password")
+            if st.form_submit_button("Login", type="primary"):
+                if check_login(user_in, pass_in):
+                    st.session_state.authenticated = True
+                    st.session_state.username = user_in
+                    st.success("Login Successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid Username or Password")
+
+    with col2:
+        st.markdown("### 📝 Register")
+        with st.form("reg_form"):
+            new_user = st.text_input("New Username")
+            new_pass = st.text_input("New Password", type="password")
+            if st.form_submit_button("Create Account"):
+                if len(new_user) < 3 or len(new_pass) < 3:
+                    st.error("Username/Password too short")
+                elif register_user(new_user, new_pass):
+                    st.success("User Created! You can now Login.")
+                else:
+                    st.error("User already exists.")
+
+    # --- USER DATABASE MANAGEMENT (Crucial for Persistence) ---
+    st.divider()
+    st.warning("⚠️ IMPORTANT: User accounts are lost if the app restarts. Download the backup below.")
+    
+    c_back, c_rest = st.columns(2)
+    with c_back:
+        # Export Users
+        user_json = json.dumps(st.session_state.user_db)
+        st.download_button("💾 Download User List (Backup)", user_json, "users.json", "application/json")
+        
+    with c_rest:
+        # Import Users
+        uploaded_users = st.file_uploader("Restore User List (users.json)", type=['json'])
+        if uploaded_users:
+            try:
+                loaded_users = json.load(uploaded_users)
+                st.session_state.user_db.update(loaded_users)
+                st.success("User list restored!")
+            except:
+                st.error("Invalid JSON file")
+
+    st.stop() # Stop here if not logged in
 
 # =========================================================
-# MAIN APP (EXECUTED ONLY IF LOGGED IN)
+# MAIN APP (USER IS LOGGED IN)
 # =========================================================
 
-# Determine the database file for the logged-in user
-CURRENT_DB_FILE = get_user_db_file(st.session_state.username)
+# Generate unique filename for the user's data
+CURRENT_DB_FILE = f"data_{st.session_state.username}.csv"
 
-# Data Load/Save Functions
+# --- DATA FUNCTIONS ---
 def load_data():
     expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
                      "Address", "Reason", "Responsible", "Category", "Medical", "Amount"]
     
+    # Try loading from disk if it exists in current session
     if os.path.exists(CURRENT_DB_FILE):
         try:
             df = pd.read_csv(CURRENT_DB_FILE)
-            # Ensure columns exist
             for col in expected_cols:
                 if col not in df.columns: df[col] = ""
             return df
@@ -161,7 +155,6 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
     
     if header_msg: elements.append(Paragraph(header_msg, styles['Normal'])); elements.append(Spacer(1, 12))
     
-    # Data Prep
     df_reset = dataframe.reset_index()
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
     clean_data = []
@@ -187,39 +180,40 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
     buffer.seek(0)
     return buffer
 
-# Load Data into Session State
+# Load Data into Session
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
 # --- SIDEBAR ---
 with st.sidebar:
-    st.header(f"👤 User: {st.session_state.username}")
+    st.title(f"👤 {st.session_state.username}")
     
     if st.button("Logout", type="primary"):
         st.session_state.authenticated = False
         st.session_state.username = ""
-        st.session_state.df = pd.DataFrame() # Clear data
+        # We don't delete user_db here so other users persist in session
         st.rerun()
         
     st.divider()
-    st.markdown("### 🛠️ Data Tools")
+    st.info(f"Data File: {CURRENT_DB_FILE}")
     
-    # Backup
+    # 1. Backup Data
     csv = st.session_state.df.to_csv(index=False).encode('utf-8')
-    st.download_button("💾 Backup Database (CSV)", csv, f"backup_{st.session_state.username}.csv", "text/csv")
+    st.download_button("💾 Backup Transactions (CSV)", csv, f"backup_{st.session_state.username}.csv", "text/csv")
     
-    # Restore
-    uploaded = st.file_uploader("Restore Database", type=['csv'])
+    # 2. Restore Data
+    uploaded = st.file_uploader("Restore Transactions", type=['csv'])
     if uploaded:
         try:
             st.session_state.df = pd.read_csv(uploaded)
             save_data(st.session_state.df)
-            st.success("Restored!")
+            st.success("Transactions Restored!")
             st.rerun()
         except:
-            st.error("Invalid File")
+            st.error("Invalid CSV")
             
-    if st.button("⚠️ Clear All Data"):
+    # 3. Clear Data
+    if st.button("⚠️ Clear My Data"):
         empty_df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "Medical", "Amount"])
         save_data(empty_df)
         st.session_state.df = empty_df
@@ -228,7 +222,6 @@ with st.sidebar:
 # --- DASHBOARD ---
 st.title("Charity Management System")
 
-# Calculate Stats
 df = st.session_state.df
 curr_yr = int(datetime.now().year)
 tot_inc = 0.0; yr_inc = 0.0; tot_don = 0.0; yr_don = 0.0
@@ -255,19 +248,21 @@ tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities Log", "3. Ana
 with tab1:
     st.subheader("New Transaction")
     
-    # Type selection OUTSIDE the form to trigger updates
-    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True)
+    # TYPE SELECTION (Outside form for immediate update)
+    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
-    # Additional selections outside form for reactivity
+    # VARS FOR OUTSIDE FORM LOGIC
     category_selection = ""
     medical_selection = ""
     
+    # IF OUTGOING -> Show Donation Categories Immediately
     if t_type == "Outgoing":
-        st.info("Please fill Donation details below.")
+        st.info("Please select donation details:")
         col_cat, col_med = st.columns(2)
-        category_selection = col_cat.selectbox("Donation Category", OUTGOING_TYPES)
+        category_selection = col_cat.selectbox("Donation Category", OUTGOING_TYPES, key="cat_select")
+        
         if category_selection == "Medical help":
-            medical_selection = col_med.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
+            medical_selection = col_med.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="med_select")
     
     st.divider()
     
@@ -296,10 +291,10 @@ with tab1:
                 
             category = col3.selectbox("Category", INCOME_TYPES)
             
-        else: # Outgoing
+        else: # Outgoing (Inputs inside form)
             col1, col2 = st.columns(2)
             member_name = col1.text_input("Beneficiary Name")
-            address = col2.text_input("Address")
+            address = col2.text_input("Address / Location")
             
             col3, col4 = st.columns(2)
             reason = col3.text_input("Reason")
@@ -337,7 +332,7 @@ with tab1:
             else:
                 st.error("Name and Amount required.")
 
-# === TAB 2: ACTIVITIES ===
+# === TAB 2: LOG ===
 with tab2:
     st.subheader("Activities Log")
     f1, f2, f3, f4 = st.columns(4)
@@ -345,7 +340,7 @@ with tab2:
     f_tp = f2.selectbox("Filter Type", ["All", "Incoming", "Outgoing"])
     f_gr = f3.selectbox("Filter Group", ["All", "Brother", "Sister"])
     
-    view = df.copy()
+    view = st.session_state.df.copy()
     if f_yr != "All": view = view[view['Year'] == int(f_yr)]
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
@@ -354,19 +349,17 @@ with tab2:
     edited = st.data_editor(view[cols], column_config={"Amount": st.column_config.NumberColumn(format="€%.2f")}, use_container_width=True, num_rows="dynamic", key="log_edit")
     
     if st.button("Save Edits"):
-        if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            st.session_state.df.update(edited)
-            save_data(st.session_state.df)
-            st.success("Updated!")
-            st.rerun()
-        else: st.warning("Reset filters to 'All' to save.")
+        st.session_state.df.update(edited)
+        save_data(st.session_state.df)
+        st.success("Updated!")
+        st.rerun()
 
 # === TAB 3: ANALYSIS ===
 with tab3:
     st.subheader("Analysis")
-    c1, c2 = st.columns(2)
-    grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="an_grp")
-    cat = c2.selectbox("Category", ["All"] + INCOME_TYPES, key="an_cat")
+    ac1, ac2 = st.columns(2)
+    grp = ac1.selectbox("Group", ["All", "Brother", "Sister"], key="a")
+    cat = ac2.selectbox("Category", ["All"] + INCOME_TYPES)
     
     if not df.empty:
         adf = df[df['Type'] == 'Incoming']
@@ -375,44 +368,42 @@ with tab3:
         
         if not adf.empty:
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
-            col1, col2 = st.columns([2,1])
-            with col1:
+            c1, c2 = st.columns([2,1])
+            with c1:
                 fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True)
                 st.plotly_chart(fig, use_container_width=True)
-            with col2:
+            with c2:
                 st.dataframe(stats, hide_index=True, use_container_width=True)
                 st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
         else: st.warning("No data.")
 
-# === TAB 4: MEMBER REPORT ===
+# === TAB 4: REPORT ===
 with tab4:
     st.subheader("Member Report")
-    c1, c2, c3 = st.columns(3)
-    mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="rep_grp")
-    
+    mc1, mc2, mc3 = st.columns(3)
+    mat_grp = mc1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
     mems_list = df[df['Type'] == 'Incoming']
     if mat_grp != "All": mems_list = mems_list[mems_list['Group'] == mat_grp]
     mems = sorted(mems_list['Name_Details'].unique())
     
     if mems:
-        target = c2.selectbox("Select Member", mems)
-        tyear = c3.selectbox("Select Year", ["All"] + sorted(list(set(df['Year'].astype(str)))))
-        
+        target = mc2.selectbox("Select Member", mems)
+        tyear = mc3.selectbox("Select Year", ["All"] + sorted(list(set(df['Year'].astype(str)))))
         mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
         if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
         
         if not mdf.empty:
             piv = mdf.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
             piv['Daily Total'] = piv.sum(axis=1)
-            gtot = piv['Daily Total'].sum()
+            g_tot = piv['Daily Total'].sum()
             st.dataframe(piv, use_container_width=True)
-            st.success(f"Grand Total: {CURRENCY}{gtot:,.2f}")
+            st.success(f"Grand Total: {CURRENCY}{g_tot:,.2f}")
             
-            with st.expander("PDF Custom Text"):
-                h = st.text_area("Header", "We appreciate your contribution.")
-                f = st.text_area("Footer", "Contact admin for details.")
+            with st.expander("PDF Options"):
+                h = st.text_area("Header", "Thanks for your contribution.")
+                f = st.text_area("Footer", "Contact admin for queries.")
             
             if HAS_PDF:
-                pdf = generate_pdf(target, tyear, piv, h, f, gtot)
+                pdf = generate_pdf(target, tyear, piv, h, f, g_tot)
                 st.download_button("Download PDF", pdf, f"{target}_Report.pdf", "application/pdf")
-    else: st.info("No members found.")
+        else: st.info("No records.")
