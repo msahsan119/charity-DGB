@@ -28,7 +28,7 @@ CURRENCY = "€"
 # FUND SOURCES (Used for both Income and Outgoing Source)
 FUND_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
 
-# USAGE TYPES (How the money is spent)
+# USAGE TYPES
 OUTGOING_USAGES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship Distribution", "Other"]
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
@@ -125,15 +125,10 @@ def save_data(df):
     df.to_csv(CURRENT_DB_FILE, index=False)
 
 def get_fund_balance(df, fund_category):
-    """Calculates live balance for a specific fund"""
     if df.empty: return 0.0
-    
-    # Ensure amount is numeric
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-    
     income = df[(df['Type'] == 'Incoming') & (df['Category'] == fund_category)]['Amount'].sum()
     expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
-    
     return income - expense
 
 # PDF Generator
@@ -235,7 +230,7 @@ with st.sidebar:
             st.success("Restored!")
             st.rerun()
 
-# --- DASHBOARD ---
+# --- DASHBOARD (LIVE STATISTICS) ---
 st.title("Charity Management System")
 df = st.session_state.df
 curr_yr = int(datetime.now().year)
@@ -243,13 +238,26 @@ curr_yr = int(datetime.now().year)
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
 
-# 1. Calculate Fund Balances
-st.subheader("💰 Live Fund Balances")
+# Main Stats (Medium Size)
+st.markdown("### 📊 Live Statistics")
+tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
+yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
+tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
+yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
+c2.metric(f"Income ({curr_yr})", f"{CURRENCY}{yr_inc:,.2f}")
+c3.metric("Total Donation", f"{CURRENCY}{tot_don:,.2f}")
+c4.metric(f"Donation ({curr_yr})", f"{CURRENCY}{yr_don:,.2f}")
+
+st.divider()
+
+# Fund Balances
+st.markdown("#### 💰 Fund Balances")
 fund_cols = st.columns(len(FUND_TYPES))
 for i, fund in enumerate(FUND_TYPES):
     bal = get_fund_balance(df, fund)
-    # Determine color (Red if negative, Green if positive)
-    delta_color = "normal" if bal >= 0 else "inverse" 
     fund_cols[i].metric(label=fund, value=f"{CURRENCY}{bal:,.2f}")
 
 st.divider()
@@ -292,22 +300,21 @@ with tab1:
     
     if t_type == "Outgoing":
         st.info("ℹ️ Donation Details:")
-        col_fund, col_use = st.columns(2)
+        col_grp, col_cat = st.columns(2)
         
-        # 1. Select Fund Source (Sadaka, Zakat, etc) to check balance
-        sel_category = col_fund.selectbox("Select Fund Source", FUND_TYPES, key="out_cat")
+        # ADDED: Outgoing Group Selection
+        out_grp = col_grp.radio("Beneficiary Group:", ["Brother", "Sister"], horizontal=True, key="out_grp")
         
-        # Show Balance immediately
+        # Fund Source
+        sel_category = col_cat.selectbox("Select Fund Source", FUND_TYPES, key="out_cat")
         current_balance = get_fund_balance(df, sel_category)
         if current_balance > 0:
-            col_fund.success(f"Available Balance: {CURRENCY}{current_balance:,.2f}")
+            col_cat.success(f"Available: {CURRENCY}{current_balance:,.2f}")
         else:
-            col_fund.error(f"Insufficient Funds: {CURRENCY}{current_balance:,.2f}")
+            col_cat.error(f"Low Balance: {CURRENCY}{current_balance:,.2f}")
         
-        # 2. Select Usage (Medical, Financial etc)
-        sel_sub_category = col_use.selectbox("Donation Usage", OUTGOING_USAGES, key="out_sub")
-        
-        # 3. Medical Specifics
+        # Usage
+        sel_sub_category = st.selectbox("Donation Usage", OUTGOING_USAGES, key="out_sub")
         if sel_sub_category == "Medical help":
             med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
             sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
@@ -326,15 +333,11 @@ with tab1:
             valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == group_sel]
             valid_mems.sort()
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
-            
-            # Map Incoming directly
-            category = st.selectbox("Fund Category", FUND_TYPES)
+            category = st.selectbox("Category", FUND_TYPES)
             group = group_sel
             
-            # Sub/Medical empty for income
             sub_category = ""
             medical = ""
-            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
@@ -346,18 +349,19 @@ with tab1:
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
             
             # Map external to internal variables
-            category = sel_category # This is the Fund (Sadaka/Zakat)
-            sub_category = sel_sub_category # This is Usage (Medical/Financial)
+            category = sel_category
+            sub_category = sel_sub_category
             medical = sel_medical
-            group = "N/A"
+            group = out_grp # Uses the selected Brother/Sister group
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
-            # BALANCE CHECK for Outgoing
+            # Balance check for outgoing
             if t_type == "Outgoing" and amount > current_balance:
-                st.error(f"❌ Transaction Failed! Insufficient funds in {category}. Available: {CURRENCY}{current_balance:,.2f}")
+                st.error(f"Insufficient funds in {category}!")
             elif amount > 0 and member_name:
                 new_row = {
-                    "ID": str(uuid.uuid4()), "Date": str(date_val), "Year": int(date_val.year), "Month": int(date_val.month),
+                    "ID": str(uuid.uuid4()), "Date": str(date_val), 
+                    "Year": int(date_val.year), "Month": int(date_val.month),
                     "Type": t_type, "Group": group, "Name_Details": member_name, 
                     "Address": address, "Reason": reason, "Responsible": responsible,
                     "Category": category, "SubCategory": sub_category, "Medical": medical, "Amount": amount
