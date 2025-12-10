@@ -10,7 +10,7 @@ import io
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 
 # --- 1. CONFIGURATION ---
@@ -22,15 +22,30 @@ CURRENCY = "€"
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
 MONTHS = ["January", "February", "March", "April", "May", "June", 
           "July", "August", "September", "October", "November", "December"]
+
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
-OUTGOING_TYPES = ["Financial help", "Medical help", "Karje Hasana", "Mosque", "Dead Body Funeral"]
-MEDICAL_SUB_TYPES = ["Cancer", "Heart", "Lung", "Brain", "Bone", "Other"]
+
+# Updated Outgoing Categories
+OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
+
+# Updated Medical Sub-types
+MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
 # --- 2. DATA FUNCTIONS ---
 def load_data():
+    # Define the columns we expect
+    expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
+                     "Address", "Reason", "Responsible", "Category", "Medical", "Amount"]
+    
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
-    return pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Category", "Medical", "Amount"])
+        df = pd.read_csv(DATA_FILE)
+        # Ensure all new columns exist if loading an old file
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = ""
+        return df
+    
+    return pd.DataFrame(columns=expected_cols)
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
@@ -42,39 +57,31 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
     elements = []
     styles = getSampleStyleSheet()
     
-    # 1. Title & Header
     elements.append(Paragraph(f"Contribution Report: {member_name}", styles['Title']))
     elements.append(Paragraph(f"Year: {year}", styles['Heading2']))
     elements.append(Spacer(1, 12))
     
-    # 2. Custom Top Message
     if header_msg:
         elements.append(Paragraph(header_msg, styles['Normal']))
         elements.append(Spacer(1, 12))
 
-    # 3. Table Data Preparation
-    # Convert DataFrame to list of lists for ReportLab
-    # Reset index to make 'Date' a column
+    # Prepare Data
     df_reset = dataframe.reset_index()
-    # Rename columns for cleanliness
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
     
-    # Convert all data to string to avoid ReportLab errors
     clean_data = []
     for row in data:
         clean_row = []
         for item in row:
             if isinstance(item, float) or isinstance(item, int):
-                clean_row.append(f"{item:,.2f}") # Format numbers
+                clean_row.append(f"{item:,.2f}")
             else:
                 clean_row.append(str(item))
         clean_data.append(clean_row)
         
-    # Add Total Row
     total_row = [""] * (len(clean_data[0]) - 2) + ["GRAND TOTAL:", f"{grand_total:,.2f}"]
     clean_data.append(total_row)
 
-    # 4. Create Table
     t = Table(clean_data)
     t.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
@@ -84,18 +91,15 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ('BACKGROUND', (0, 1), (-1, -2), colors.beige),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'), # Bold Total
-        ('TEXTCOLOR', (-2, -1), (-1, -1), colors.darkblue),
+        ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'),
     ]))
     elements.append(t)
     elements.append(Spacer(1, 20))
 
-    # 5. Custom Bottom Message
     if footer_msg:
         elements.append(Paragraph(footer_msg, styles['Normal']))
         elements.append(Spacer(1, 30))
 
-    # 6. Signature Section
     elements.append(Paragraph("_" * 30, styles['Normal']))
     elements.append(Paragraph("Authorized Signature", styles['Normal']))
 
@@ -127,13 +131,14 @@ with st.sidebar:
             st.error("Invalid CSV file.")
 
 # --- 4. DASHBOARD ---
-st.title("Charity Management System (Online)")
+st.title("Charity Management System")
 
 df = st.session_state.df
 current_year = int(datetime.now().year)
 
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
+    
     tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
     yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == current_year)]['Amount'].sum()
     tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
@@ -150,56 +155,106 @@ c4.metric(f"Donation {current_year}", f"{CURRENCY}{yr_don:,.2f}")
 st.divider()
 
 # --- 5. TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities Log", "3. Analysis", "4. Member Contributions & PDF"])
+tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities Log", "3. Analysis", "4. Member Report"])
 
 # === TAB 1: TRANSACTION ENTRY ===
 with tab1:
     st.subheader("New Transaction")
+    
     with st.form("entry_form", clear_on_submit=True):
         col1, col2, col3, col4 = st.columns(4)
         t_type = col1.radio("Type", ["Incoming", "Outgoing"], horizontal=True)
         year = col2.selectbox("Year", YEAR_LIST)
         month = col3.selectbox("Month", MONTHS, index=datetime.now().month-1)
         day = col4.number_input("Day", 1, 31, datetime.now().day)
+        
         amount = st.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        member_name, group, category, medical = "Organization", "N/A", "", ""
+        # Init variables
+        member_name, group, category, medical, address, reason, responsible = "", "N/A", "", "", "", "", ""
         
+        # --- LOGIC FOR INCOMING ---
         if t_type == "Incoming":
             c_grp, c_mem, c_cat = st.columns([1,2,2])
             group = c_grp.radio("Group", ["Brother", "Sister"], horizontal=True)
+            
             existing_mems = []
             if not df.empty:
                 existing_mems = sorted(df[(df['Type'] == 'Incoming') & (df['Group'] == group)]['Name_Details'].unique().tolist())
+            
             member_name = c_mem.selectbox("Member Name", options=existing_mems + ["Add New..."])
             if member_name == "Add New...":
                 member_name = c_mem.text_input("Enter New Member Name")
+                
             category = c_cat.selectbox("Category", INCOME_TYPES)
+            
+        # --- LOGIC FOR OUTGOING (DONATION) ---
         else:
-            c_cat, c_med = st.columns(2)
-            category = c_cat.selectbox("Type", OUTGOING_TYPES)
+            st.markdown("### Donation Details")
+            
+            row_a1, row_a2 = st.columns(2)
+            member_name = row_a1.text_input("Beneficiary Person Name")
+            address = row_a2.text_input("Address / Location")
+            
+            row_b1, row_b2 = st.columns(2)
+            reason = row_b1.text_input("Reason / Note")
+            
+            # Responsible Person (Select from existing members to keep data clean)
+            all_members = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
+            responsible = row_b2.selectbox("Responsible Person", options=["Select..."] + all_members + ["Other"])
+            if responsible == "Other":
+                responsible = row_b2.text_input("Enter Responsible Person Name")
+            
+            row_c1, row_c2 = st.columns(2)
+            category = row_c1.selectbox("Donation Category", OUTGOING_TYPES)
+            
             if category == "Medical help":
-                medical = c_med.selectbox("Condition", MEDICAL_SUB_TYPES)
+                medical_select = row_c2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
+                if medical_select == "Other":
+                    medical = row_c2.text_input("Specify Condition")
+                else:
+                    medical = medical_select
         
+        # --- SUBMIT BUTTON ---
         if st.form_submit_button("Save Transaction"):
             if amount > 0 and member_name:
                 m_idx = MONTHS.index(month) + 1
                 date_str = f"{year}-{m_idx:02d}-{int(day):02d}"
+                
                 new_row = {
-                    "ID": str(uuid.uuid4()), "Date": date_str, "Year": int(year), "Month": month,
-                    "Type": t_type, "Group": group, "Name_Details": member_name,
-                    "Category": category, "Medical": medical, "Amount": amount
+                    "ID": str(uuid.uuid4()), 
+                    "Date": date_str,
+                    "Year": int(year), 
+                    "Month": month,
+                    "Type": t_type, 
+                    "Group": group,
+                    "Name_Details": member_name, # Stores Member Name OR Beneficiary Name
+                    "Address": address,
+                    "Reason": reason,
+                    "Responsible": responsible,
+                    "Category": category, 
+                    "Medical": medical, 
+                    "Amount": amount
                 }
+                
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(st.session_state.df)
-                st.success("Saved!")
+                st.success("Saved Successfully!")
                 st.rerun()
             else:
-                st.error("Enter Name and Amount")
+                st.error("Please enter Name and Amount")
+
+    # Last 5 Transactions
+    if not df.empty:
+        st.caption("Recent Transactions")
+        # Display specific columns based on type mix
+        disp_df = df.tail(5).iloc[::-1].copy()
+        st.dataframe(disp_df[["Date", "Type", "Category", "Name_Details", "Responsible", "Amount"]], hide_index=True)
 
 # === TAB 2: ACTIVITIES LOG ===
 with tab2:
     st.subheader("Activities Log")
+    
     f1, f2, f3, f4 = st.columns(4)
     f_yr = f1.selectbox("Filter Year", ["All"] + YEAR_LIST)
     f_tp = f2.selectbox("Filter Type", ["All", "Incoming", "Outgoing"])
@@ -210,16 +265,33 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    edited_df = st.data_editor(view, column_config={"ID": None, "Amount": st.column_config.NumberColumn(format="€%.2f")}, use_container_width=True, num_rows="dynamic", key="editor")
+    # Select columns to display based on what's relevant
+    cols_to_show = ["Date", "Type", "Name_Details", "Category", "Medical", "Address", "Responsible", "Amount"]
+    
+    edited_df = st.data_editor(
+        view[cols_to_show],
+        column_config={
+            "Name_Details": "Name/Beneficiary",
+            "Amount": st.column_config.NumberColumn(format="€%.2f")
+        },
+        use_container_width=True,
+        num_rows="dynamic",
+        key="editor"
+    )
     
     if st.button("💾 Save Changes to Database"):
         if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            st.session_state.df = edited_df
+            # Update only the columns shown, keep others (like IDs) intact is tricky in simple mode
+            # For robustness in simple mode, we assume row index matches if no sort happened
+            # A safer way in production is to map by ID, but for this scale:
+            st.session_state.df.update(edited_df)
             save_data(st.session_state.df)
             st.success("Changes Saved!")
             st.rerun()
         else:
-            st.warning("Set all filters to 'All' before saving edits.")
+            st.warning("To edit/delete rows safely, please set all filters to 'All' first.")
+
+    st.info(f"**Total in view: {CURRENCY}{view['Amount'].sum():,.2f}**")
 
 # === TAB 3: ANALYSIS ===
 with tab3:
@@ -235,9 +307,10 @@ with tab3:
         
         if not adf.empty:
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
+            
             c1, c2 = st.columns([2,1])
             with c1:
-                fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True)
+                fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True, title="Contribution Analysis")
                 st.plotly_chart(fig, use_container_width=True)
             with c2:
                 st.dataframe(stats, hide_index=True, use_container_width=True)
@@ -245,7 +318,7 @@ with tab3:
         else:
             st.warning("No data found.")
 
-# === TAB 4: MEMBER MATRIX (PDF) ===
+# === TAB 4: MEMBER MATRIX ===
 with tab4:
     st.subheader("Member Contribution Report")
     
@@ -260,10 +333,9 @@ with tab4:
         target = mc2.selectbox("Select Member", mems)
         tyear = mc3.selectbox("Select Year", ["All"] + YEAR_LIST, key="myr")
         
-        # Messages for PDF
-        with st.expander("📝 Custom Report Messages (Optional)", expanded=True):
-            header_txt = st.text_area("Header Message", "We truly appreciate your generous contributions to the community.")
-            footer_txt = st.text_area("Footer Message", "May you be rewarded for your kindness. Please contact admin for discrepancies.")
+        with st.expander("📝 PDF Custom Messages", expanded=False):
+            header_txt = st.text_area("Header Message", "We appreciate your generous contributions.")
+            footer_txt = st.text_area("Footer Message", "Please contact admin for discrepancies.")
         
         mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
         if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
@@ -276,16 +348,8 @@ with tab4:
             st.dataframe(piv, use_container_width=True)
             st.success(f"**Grand Total: {CURRENCY}{grand_total:,.2f}**")
             
-            # Generate PDF
             pdf_file = generate_pdf(target, tyear, piv, header_txt, footer_txt, grand_total)
-            
-            st.download_button(
-                label="📄 Download Official PDF Report",
-                data=pdf_file,
-                file_name=f"{target}_Report_{tyear}.pdf",
-                mime="application/pdf",
-                type="primary"
-            )
+            st.download_button("📄 Download PDF Report", pdf_file, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
         else:
             st.info("No records found.")
     else:
