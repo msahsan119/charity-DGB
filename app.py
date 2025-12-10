@@ -5,6 +5,8 @@ from datetime import datetime
 import plotly.express as px
 import uuid
 import io
+import hashlib
+import json
 
 # --- REPORTLAB IMPORTS (For PDF) ---
 try:
@@ -21,6 +23,7 @@ st.set_page_config(page_title="Charity Management System", layout="wide", page_i
 
 # Constants
 DATA_FILE = "charity_data.csv"
+USER_FILE = "users.json"
 CURRENCY = "€"
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
 MONTHS = ["January", "February", "March", "April", "May", "June", 
@@ -30,26 +33,88 @@ INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
 OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
-# --- 2. DATA FUNCTIONS ---
+# --- 2. AUTHENTICATION FUNCTIONS ---
+def hash_password(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def load_users():
+    if not os.path.exists(USER_FILE):
+        return {}
+    try:
+        with open(USER_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_user(username, password):
+    users = load_users()
+    users[username] = hash_password(password)
+    with open(USER_FILE, 'w') as f:
+        json.dump(users, f)
+
+def check_login(username, password):
+    users = load_users()
+    if username in users and users[username] == hash_password(password):
+        return True
+    return False
+
+# --- 3. SESSION STATE INIT ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'username' not in st.session_state:
+    st.session_state.username = ""
+
+# --- 4. LOGIN SYSTEM UI ---
+if not st.session_state.authenticated:
+    st.title("🔒 Charity System Access")
+    
+    auth_mode = st.radio("Select Option:", ["Login", "Register New User"], horizontal=True)
+    
+    with st.form("auth_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Submit")
+        
+        if submit:
+            if auth_mode == "Login":
+                if check_login(username, password):
+                    st.session_state.authenticated = True
+                    st.session_state.username = username
+                    st.success("Login Successful!")
+                    st.rerun()
+                else:
+                    st.error("Invalid Username or Password")
+            
+            elif auth_mode == "Register New User":
+                users = load_users()
+                if username in users:
+                    st.error("Username already exists.")
+                elif len(username) < 3 or len(password) < 3:
+                    st.error("Username and Password must be at least 3 characters.")
+                else:
+                    save_user(username, password)
+                    st.success("Account created! Please switch to 'Login' tab to sign in.")
+
+    st.stop() # Stop code here if not logged in
+
+# =========================================================
+# MAIN APPLICATION (Only runs if Logged In)
+# =========================================================
+
+# --- DATA FUNCTIONS ---
 def load_data():
-    # These are the REQUIRED columns for the new version
     expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
                      "Address", "Reason", "Responsible", "Category", "Medical", "Amount"]
     
     if os.path.exists(DATA_FILE):
         try:
             df = pd.read_csv(DATA_FILE)
-            # FORCE MIGRATION: If old CSV is missing columns, add them now
-            missing_cols = [c for c in expected_cols if c not in df.columns]
-            if missing_cols:
-                for c in missing_cols:
-                    df[c] = "" # Add empty column
-                # Save immediately to fix the file structure
-                df.to_csv(DATA_FILE, index=False)
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = ""
             return df
         except:
             return pd.DataFrame(columns=expected_cols)
-            
     return pd.DataFrame(columns=expected_cols)
 
 def save_data(df):
@@ -70,9 +135,7 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
         elements.append(Paragraph(header_msg, styles['Normal']))
         elements.append(Spacer(1, 12))
 
-    # Prepare Data
     df_reset = dataframe.reset_index()
-    # Convert headers
     headers = [col for col in df_reset.columns]
     data = [headers] + df_reset.values.tolist()
     
@@ -95,7 +158,7 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-        ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
     ]))
     elements.append(t)
     elements.append(Spacer(1, 20))
@@ -111,36 +174,45 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
     buffer.seek(0)
     return buffer
 
-# Initialize Session State
+# Load Data
 if 'df' not in st.session_state:
     st.session_state.df = load_data()
 
-# --- 3. SIDEBAR ---
+# --- SIDEBAR ---
 with st.sidebar:
-    st.header("💚 Charity Menu")
-    
-    csv = st.session_state.df.to_csv(index=False).encode('utf-8')
-    st.download_button("💾 Download Backup (CSV)", csv, "charity_backup.csv", "text/csv", type="primary")
+    st.header(f"👤 {st.session_state.username}")
+    if st.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
     
     st.divider()
+    st.info("System Menu")
     
-    # CLEAR DATA BUTTON (Use this if columns don't show up!)
-    if st.button("⚠️ Reset / Clear Database", type="secondary"):
+    csv = st.session_state.df.to_csv(index=False).encode('utf-8')
+    st.download_button("💾 Download Backup", csv, "charity_backup.csv", "text/csv")
+    
+    uploaded_file = st.file_uploader("Restore Database", type=['csv'])
+    if uploaded_file is not None:
+        try:
+            st.session_state.df = pd.read_csv(uploaded_file)
+            save_data(st.session_state.df)
+            st.success("Restored!")
+            st.rerun()
+        except:
+            st.error("Invalid CSV")
+            
+    if st.button("⚠️ Clear All Data"):
         empty_df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "Medical", "Amount"])
         save_data(empty_df)
         st.session_state.df = empty_df
         st.rerun()
 
-# --- 4. DASHBOARD ---
+# --- DASHBOARD ---
 st.title("Charity Management System")
 
 df = st.session_state.df
 current_year = int(datetime.now().year)
-
-tot_inc = 0.0
-yr_inc = 0.0
-tot_don = 0.0
-yr_don = 0.0
+tot_inc = 0.0; yr_inc = 0.0; tot_don = 0.0; yr_don = 0.0
 
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
@@ -157,10 +229,10 @@ c4.metric(f"Donation {current_year}", f"{CURRENCY}{yr_don:,.2f}")
 
 st.divider()
 
-# --- 5. TABS ---
+# --- TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["1. Transaction", "2. Activities Log", "3. Analysis", "4. Member Report"])
 
-# === TAB 1: TRANSACTION ENTRY ===
+# === TAB 1: TRANSACTION ===
 with tab1:
     st.subheader("New Transaction")
     
@@ -173,11 +245,11 @@ with tab1:
         
         amount = st.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        # Vars
+        # Variables
         member_name, group, category, medical = "", "N/A", "", ""
         address, reason, responsible = "", "", ""
         
-        # --- INCOMING LAYOUT ---
+        # LOGIC
         if t_type == "Incoming":
             st.divider()
             c_grp, c_mem, c_cat = st.columns([1,2,2])
@@ -195,40 +267,31 @@ with tab1:
                 
             category = c_cat.selectbox("Category", INCOME_TYPES)
             
-        # --- OUTGOING LAYOUT ---
         else:
+            # Outgoing Logic
             st.divider()
             st.markdown("##### 📤 Donation Details")
-            
-            # Row A
             ra1, ra2 = st.columns(2)
-            member_name = ra1.text_input("Beneficiary Name (Person receiving money)")
+            member_name = ra1.text_input("Beneficiary Name")
             address = ra2.text_input("Address / Location")
             
-            # Row B
             rb1, rb2 = st.columns(2)
-            reason = rb1.text_input("Reason for Donation")
+            reason = rb1.text_input("Reason")
             
-            # Responsible Person Logic
             all_mems = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
             resp_sel = rb2.selectbox("Responsible Person", options=["Select..."] + all_mems + ["Other"])
-            if resp_sel == "Other" or resp_sel == "Select...":
-                responsible = rb2.text_input("Type Responsible Name")
-            else:
-                responsible = resp_sel
+            responsible = rb2.text_input("Type Name") if resp_sel == "Other" or resp_sel == "Select..." else resp_sel
             
-            # Row C
             rc1, rc2 = st.columns(2)
             category = rc1.selectbox("Donation Category", OUTGOING_TYPES)
             
+            # FIXED MEDICAL LOGIC: Only show if category matches
             if category == "Medical help":
                 med_sel = rc2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
-                if med_sel == "Other":
-                    medical = rc2.text_input("Specify Condition")
-                else:
-                    medical = med_sel
+                medical = rc2.text_input("Specify Condition") if med_sel == "Other" else med_sel
+            else:
+                medical = "" # Ensure it's empty for non-medical donations
         
-        # SUBMIT
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 m_idx = MONTHS.index(month) + 1
@@ -237,9 +300,8 @@ with tab1:
                 new_row = {
                     "ID": str(uuid.uuid4()), "Date": date_str, "Year": int(year), "Month": month,
                     "Type": t_type, "Group": group, 
-                    "Name_Details": member_name, 
-                    "Address": address, "Reason": reason, "Responsible": responsible,
-                    "Category": category, "Medical": medical, "Amount": amount
+                    "Name_Details": member_name, "Address": address, "Reason": reason, 
+                    "Responsible": responsible, "Category": category, "Medical": medical, "Amount": amount
                 }
                 
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
@@ -247,9 +309,13 @@ with tab1:
                 st.success("Saved Successfully!")
                 st.rerun()
             else:
-                st.error("Please enter Name and Amount")
+                st.error("Please enter Name and Amount.")
 
-# === TAB 2: ACTIVITIES LOG ===
+    if not df.empty:
+        st.caption("Recent Transactions")
+        st.dataframe(df.tail(5).iloc[::-1][["Date", "Type", "Category", "Name_Details", "Amount"]], hide_index=True)
+
+# === TAB 2: LOG ===
 with tab2:
     st.subheader("Activities Log")
     f1, f2, f3, f4 = st.columns(4)
@@ -262,28 +328,17 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    # Columns to display
-    cols = ["Date", "Type", "Category", "Name_Details", "Responsible", "Medical", "Address", "Amount"]
-    
-    edited_df = st.data_editor(
-        view[cols],
-        column_config={
-            "Name_Details": "Name/Beneficiary",
-            "Amount": st.column_config.NumberColumn(format="€%.2f")
-        },
-        use_container_width=True,
-        num_rows="dynamic",
-        key="editor"
-    )
+    cols_to_show = ["Date", "Type", "Name_Details", "Category", "Medical", "Address", "Reason", "Responsible", "Amount"]
+    edited_df = st.data_editor(view[cols_to_show], column_config={"Amount": st.column_config.NumberColumn(format="€%.2f")}, use_container_width=True, num_rows="dynamic", key="editor")
     
     if st.button("💾 Save Changes"):
         if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            st.session_state.df.update(edited_df) # Update matching indices
+            st.session_state.df.update(edited_df)
             save_data(st.session_state.df)
             st.success("Updated!")
             st.rerun()
         else:
-            st.warning("Set all filters to 'All' to save edits.")
+            st.warning("Set filters to 'All' to save.")
 
 # === TAB 3: ANALYSIS ===
 with tab3:
@@ -305,13 +360,13 @@ with tab3:
                 st.plotly_chart(fig, use_container_width=True)
             with c2:
                 st.dataframe(stats, hide_index=True, use_container_width=True)
-                st.success(f"**Total: {CURRENCY}{stats['Amount'].sum():,.2f}**")
+                st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
         else:
             st.warning("No data found.")
 
-# === TAB 4: MEMBER MATRIX ===
+# === TAB 4: MEMBER REPORT ===
 with tab4:
-    st.subheader("Member Contribution Report")
+    st.subheader("Member Report")
     mc1, mc2, mc3 = st.columns(3)
     mat_grp = mc1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mat_grp")
     
@@ -323,9 +378,9 @@ with tab4:
         target = mc2.selectbox("Select Member", mems)
         tyear = mc3.selectbox("Select Year", ["All"] + YEAR_LIST, key="myr")
         
-        with st.expander("📝 PDF Custom Messages", expanded=False):
-            header_txt = st.text_area("Header Message", "We appreciate your generous contributions.")
-            footer_txt = st.text_area("Footer Message", "Please contact admin for discrepancies.")
+        with st.expander("📝 PDF Messages"):
+            h_txt = st.text_area("Header", "We appreciate your contribution.")
+            f_txt = st.text_area("Footer", "Contact admin for queries.")
         
         mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
         if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
@@ -333,17 +388,11 @@ with tab4:
         if not mdf.empty:
             piv = mdf.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
             piv['Daily Total'] = piv.sum(axis=1)
-            grand_total = piv['Daily Total'].sum()
-            
+            g_tot = piv['Daily Total'].sum()
             st.dataframe(piv, use_container_width=True)
-            st.success(f"**Grand Total: {CURRENCY}{grand_total:,.2f}**")
-            
+            st.success(f"Total: {CURRENCY}{g_tot:,.2f}")
             if HAS_PDF:
-                pdf_file = generate_pdf(target, tyear, piv, header_txt, footer_txt, grand_total)
-                st.download_button("📄 Download PDF Report", pdf_file, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
-            else:
-                st.warning("Install 'reportlab' to download PDFs.")
+                pdf = generate_pdf(target, tyear, piv, h_txt, f_txt, g_tot)
+                st.download_button("📄 Download PDF", pdf, f"{target}_Report.pdf", "application/pdf")
         else:
-            st.info("No records found.")
-    else:
-        st.info("No members recorded yet.")
+            st.info("No records.")
