@@ -7,13 +7,15 @@ import hashlib
 import json
 from datetime import datetime
 import plotly.express as px
+import matplotlib.pyplot as plt
 
 # --- REPORTLAB IMPORTS (For PDF) ---
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
     HAS_PDF = True
 except ImportError:
     HAS_PDF = False
@@ -30,7 +32,6 @@ OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "D
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
-YEAR_LIST = [str(y) for y in range(2023, 2101)]
 
 # --- 2. AUTHENTICATION & FILE FUNCTIONS ---
 def get_user_db_file(username):
@@ -127,57 +128,121 @@ def get_fund_balance(df, fund_category):
     expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
     return income - expense
 
-# PDF Generator
-def generate_pdf(member_name, member_details, year, dataframe, header_msg, footer_msg, grand_total, monthly_summary):
+# --- ADVANCED PDF GENERATOR ---
+def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
+                 df_member_year, df_global_year, medical_df, header_msg, footer_msg):
+    
     if not HAS_PDF: return None
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
     styles = getSampleStyleSheet()
     
-    elements.append(Paragraph(f"Contribution Report", styles['Title']))
-    elements.append(Paragraph(f"<b>Member:</b> {member_name} | <b>Year:</b> {year}", styles['Normal']))
-    elements.append(Paragraph(f"<b>Details:</b> {member_details.get('address','-')} | {member_details.get('phone','-')}", styles['Normal']))
+    # Custom Styles
+    styles.add(ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12))
+
+    # 1. Title
+    elements.append(Paragraph(f"Member Contribution Report", styles['Title']))
+    elements.append(Spacer(1, 10))
+
+    # 2. Member Profile
+    profile_text = [
+        f"<b>Name:</b> {member_name}",
+        f"<b>Member Since:</b> {member_since}",
+        f"<b>Address:</b> {member_details.get('address', '-')}",
+        f"<b>Phone/Email:</b> {member_details.get('phone', '-')} / {member_details.get('email', '-')}",
+        f"<b>Report Year:</b> {year}"
+    ]
+    for line in profile_text:
+        elements.append(Paragraph(line, styles['Normal']))
+    
+    elements.append(Spacer(1, 10))
+    # Highlight Total
+    elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", styles['Highlight']))
     elements.append(Spacer(1, 15))
     
-    if header_msg: elements.append(Paragraph(header_msg, styles['Italic'])); elements.append(Spacer(1, 12))
+    # 3. Appreciation Box
+    if header_msg:
+        elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
+        elements.append(Spacer(1, 15))
+
+    # 4. Table 1: Member's Monthly Contributions
+    elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
     
-    # Detail Table
-    elements.append(Paragraph("Detailed Transactions", styles['Heading3']))
-    df_reset = dataframe.reset_index()
-    data = [df_reset.columns.to_list()] + df_reset.values.tolist()
-    clean_data = []
-    for row in data:
-        clean_row = []
-        for item in row:
-            if isinstance(item, (float, int)): clean_row.append(f"{item:,.2f}")
-            else: clean_row.append(str(item))
-        clean_data.append(clean_row)
-    clean_data.append([""] * (len(clean_data[0]) - 2) + ["GRAND TOTAL:", f"{grand_total:,.2f}"])
-    
-    t = Table(clean_data)
-    t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.darkgreen), ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-    elements.append(t)
+    # Group Member Data by Month
+    mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
+    t1_data = [["Month", "Amount"]]
+    t1_total = 0
+    for m_num in range(1, 13):
+        row = mem_monthly[mem_monthly['Month'] == m_num]
+        amt = row['Amount'].sum() if not row.empty else 0.0
+        t1_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
+        t1_total += amt
+    t1_data.append(["TOTAL", f"{t1_total:,.2f}"])
+
+    t1 = Table(t1_data, colWidths=[200, 150], hAlign='LEFT')
+    t1.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.darkgreen),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'), # Bold total
+    ]))
+    elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # Monthly Summary Table
-    elements.append(Paragraph("Monthly Summary", styles['Heading3']))
-    summary_data = [["Month", "Total Amount"]]
-    for index, row in monthly_summary.iterrows():
-        try:
-            m_idx = int(row['Month']) - 1
-            m_name = MONTH_NAMES[m_idx] if 0 <= m_idx < 12 else str(row['Month'])
-        except: m_name = str(row['Month'])
-        summary_data.append([m_name, f"{row['Amount']:,.2f}"])
+    # 5. Table 2: Charity Overall Spending
+    elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
     
-    t2 = Table(summary_data, colWidths=[150, 100], hAlign='LEFT')
-    t2.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.navy), ('TEXTCOLOR', (0,0), (-1,0), colors.white), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-    elements.append(t2)
-    elements.append(Spacer(1, 30))
+    global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
+    t2_data = [["Month", "Total Distributed"]]
+    t2_total = 0
+    for m_num in range(1, 13):
+        row = global_monthly[global_monthly['Month'] == m_num]
+        amt = row['Amount'].sum() if not row.empty else 0.0
+        t2_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
+        t2_total += amt
+    t2_data.append(["TOTAL", f"{t2_total:,.2f}"])
 
-    if footer_msg: elements.append(Paragraph(footer_msg, styles['Normal'])); elements.append(Spacer(1, 30))
-    elements.append(Paragraph("_" * 30, styles['Normal'])); elements.append(Paragraph("Authorized Signature", styles['Normal']))
-    
+    t2 = Table(t2_data, colWidths=[200, 150], hAlign='LEFT')
+    t2.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.navy),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+    elements.append(t2)
+    elements.append(Spacer(1, 20))
+
+    # 6. Pie Chart (Medical Analysis)
+    if not medical_df.empty:
+        elements.append(Paragraph(f"<b>3. Medical Aid Analysis ({year})</b>", styles['Heading3']))
+        
+        # Create Plot with Matplotlib
+        med_stats = medical_df.groupby("Medical")['Amount'].sum()
+        
+        if not med_stats.empty:
+            plt.figure(figsize=(4, 3))
+            plt.pie(med_stats, labels=med_stats.index, autopct='%1.1f%%', startangle=140, textprops={'fontsize': 8})
+            plt.title("Medical Donation Distribution", fontsize=10)
+            
+            # Save to buffer
+            img_buf = io.BytesIO()
+            plt.savefig(img_buf, format='png', bbox_inches='tight')
+            img_buf.seek(0)
+            plt.close()
+            
+            # Insert into PDF
+            elements.append(Image(img_buf, width=4*inch, height=3*inch))
+            elements.append(Spacer(1, 20))
+
+    # 7. Footer & Signature
+    if footer_msg:
+        elements.append(Paragraph(footer_msg, styles['Normal']))
+        elements.append(Spacer(1, 30))
+
+    elements.append(Paragraph("_" * 30, styles['Normal']))
+    elements.append(Paragraph("Authorized Signature", styles['Normal']))
+
     doc.build(elements)
     buffer.seek(0)
     return buffer
@@ -233,12 +298,12 @@ curr_yr = int(datetime.now().year)
 
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-
-st.markdown("### 📊 Live Statistics")
-tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
-yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
-tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
-yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
+    tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
+    yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
+    tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
+    yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
+else:
+    tot_inc = yr_inc = tot_don = yr_don = 0.0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
@@ -283,7 +348,6 @@ with tab1:
     
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
-    # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
     
     if t_type == "Outgoing":
@@ -305,15 +369,7 @@ with tab1:
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        # --- FIXED INITIALIZATION TO PREVENT NAME ERROR ---
-        member_name = ""
-        address = ""
-        reason = ""
-        responsible = ""
-        category = ""
-        sub_category = ""
-        medical = ""
-        group = ""
+        member_name, address, reason, responsible = "", "", "", ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -324,26 +380,16 @@ with tab1:
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
             category = st.selectbox("Category", INCOME_TYPES)
             group = group_sel
-            
-            # Explicitly set empty for Incoming
-            sub_category = ""
-            medical = ""
-            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
             member_name = c1.text_input("Beneficiary Name")
             address = c2.text_input("Address")
             c3, c4 = st.columns(2)
-            reason = c3.text_input("Reason / Note")
+            reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            
-            # Map external to internal variables
-            category = sel_category
-            sub_category = sel_sub_category
-            medical = sel_medical
-            group = out_grp
+            category, sub_category, medical, group = sel_category, sel_sub_category, sel_medical, out_grp
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if t_type == "Outgoing" and amount > current_balance:
@@ -356,12 +402,9 @@ with tab1:
                     "Address": address, "Reason": reason, "Responsible": responsible,
                     "Category": category, "SubCategory": sub_category, "Medical": medical, "Amount": amount
                 }
-                # Update Session State
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-                # Save to Disk
                 save_data(st.session_state.df)
                 st.success("Saved!")
-                # Refresh to update dashboard immediately
                 st.rerun()
             else: st.error("Name and Amount required")
 
@@ -435,9 +478,12 @@ with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
     mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
+    
+    # Combine registered members and transaction members
     reg_mems = [n for n, d in st.session_state.members_db.items() if (mat_grp == "All" or d.get('group') == mat_grp)]
     trans_mems = df[df['Type'] == 'Incoming']
     if mat_grp != "All": trans_mems = trans_mems[trans_mems['Group'] == mat_grp]
+    
     all_visible_mems = sorted(list(set(reg_mems + trans_mems['Name_Details'].unique().tolist())))
     
     if all_visible_mems:
@@ -445,30 +491,59 @@ with tab4:
         tyear = c3.selectbox("Select Year", ["All"] + sorted(list(set(df['Year'].astype(str)))))
         
         mem_info = st.session_state.members_db.get(target, {})
+        all_time_df = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
+        lifetime_total = all_time_df['Amount'].sum()
+        mem_since = all_time_df['Date'].min() if not all_time_df.empty else "N/A"
+        
+        # Display Top Section
+        st.markdown(f"## 👤 {target}")
+        i1, i2, i3 = st.columns(3)
+        i1.info(f"**Member Since:** {mem_since}")
+        i2.success(f"**Lifetime Total:** {CURRENCY}{lifetime_total:,.2f}")
+        
         with st.container():
-            st.markdown(f"**Member Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')}")
+            st.markdown(f"**Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')} | {mem_info.get('email', '-')}")
+
+        st.divider()
         
-        mdf = df[(df['Name_Details'] == target) & (df['Type'] == 'Incoming')]
-        if tyear != "All": mdf = mdf[mdf['Year'] == int(tyear)]
-        
-        if not mdf.empty:
-            piv = mdf.pivot_table(index="Date", columns="Category", values="Amount", aggfunc="sum", fill_value=0)
-            piv['Daily Total'] = piv.sum(axis=1)
-            g_tot = piv['Daily Total'].sum()
-            st.dataframe(piv, use_container_width=True)
-            st.success(f"Grand Total: {CURRENCY}{g_tot:,.2f}")
+        # PDF Message Input
+        with st.expander("📝 PDF Messages"):
+            h = st.text_area("Appreciation", "Thank you for your generous support.")
+            f = st.text_area("Footer", "Please contact us for any corrections.")
+
+        # --- DATA PROCESSING FOR PDF ---
+        # 1. Member Year Data
+        if tyear == "All":
+            year_df = all_time_df
+            year_filter = None
+        else:
+            year_filter = int(tyear)
+            year_df = all_time_df[all_time_df['Year'] == year_filter]
             
-            # Prepare monthly summary for PDF
-            monthly_sum = mdf.groupby('Month')['Amount'].sum().reset_index()
+        # 2. Global Outgoing Data (For Table 2)
+        if year_filter:
+            global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
+            medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
+        else:
+            global_out_year = df[df['Type'] == 'Outgoing']
+            medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
+
+        # Display and Generate
+        if not year_df.empty:
+            st.markdown(f"#### 📅 Contributions in {tyear}")
+            st.dataframe(year_df[["Date", "Category", "Amount"]], use_container_width=True)
             
-            with st.expander("PDF Options"):
-                h = st.text_area("Header", "We appreciate your generous contributions.")
-                f = st.text_area("Footer", "Please contact admin for discrepancies.")
+            year_total = year_df['Amount'].sum()
+            st.success(f"**Total for {tyear}: {CURRENCY}{year_total:,.2f}**")
             
             if HAS_PDF:
-                pdf = generate_pdf(target, mem_info, tyear, piv, h, f, g_tot, monthly_sum)
-                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report.pdf", "application/pdf")
-        else: st.info("No transaction records found.")
+                pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
+                                   year_df, global_out_year, medical_df_year, h, f)
+                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
+            else:
+                st.warning("ReportLab library missing.")
+        else:
+            st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
 
 # === TAB 5: OVERALL SUMMARY ===
@@ -495,6 +570,7 @@ with tab5:
             
         sum_df = pd.DataFrame(summary_table)
         st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("Year Income", f"€{t_in:,.2f}")
         c2.metric("Year Donation", f"€{t_out:,.2f}")
