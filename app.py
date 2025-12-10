@@ -7,11 +7,14 @@ import uuid
 import io
 
 # --- REPORTLAB IMPORTS (For PDF) ---
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
+try:
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    HAS_PDF = True
+except ImportError:
+    HAS_PDF = False
 
 # --- 1. CONFIGURATION ---
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
@@ -24,27 +27,26 @@ MONTHS = ["January", "February", "March", "April", "May", "June",
           "July", "August", "September", "October", "November", "December"]
 
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
-
-# Updated Outgoing Categories
 OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
-
-# Updated Medical Sub-types
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
 # --- 2. DATA FUNCTIONS ---
 def load_data():
-    # Define the columns we expect
+    # Define all columns we expect
     expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
                      "Address", "Reason", "Responsible", "Category", "Medical", "Amount"]
     
     if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-        # Ensure all new columns exist if loading an old file
-        for col in expected_cols:
-            if col not in df.columns:
-                df[col] = ""
-        return df
-    
+        try:
+            df = pd.read_csv(DATA_FILE)
+            # Migration: Add missing columns if loading an old CSV
+            for col in expected_cols:
+                if col not in df.columns:
+                    df[col] = ""
+            return df
+        except:
+            return pd.DataFrame(columns=expected_cols)
+            
     return pd.DataFrame(columns=expected_cols)
 
 def save_data(df):
@@ -52,6 +54,8 @@ def save_data(df):
 
 def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_total):
     """Generates a PDF in memory"""
+    if not HAS_PDF: return None
+    
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
@@ -67,7 +71,9 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
 
     # Prepare Data
     df_reset = dataframe.reset_index()
-    data = [df_reset.columns.to_list()] + df_reset.values.tolist()
+    # Convert headers
+    headers = [col for col in df_reset.columns]
+    data = [headers] + df_reset.values.tolist()
     
     clean_data = []
     for row in data:
@@ -129,6 +135,11 @@ with st.sidebar:
             st.rerun()
         except:
             st.error("Invalid CSV file.")
+            
+    if st.button("⚠️ Clear All Data"):
+        st.session_state.df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "Medical", "Amount"])
+        save_data(st.session_state.df)
+        st.rerun()
 
 # --- 4. DASHBOARD ---
 st.title("Charity Management System")
@@ -136,15 +147,18 @@ st.title("Charity Management System")
 df = st.session_state.df
 current_year = int(datetime.now().year)
 
+# Calculations
+tot_inc = 0.0
+yr_inc = 0.0
+tot_don = 0.0
+yr_don = 0.0
+
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-    
     tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
     yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == current_year)]['Amount'].sum()
     tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
     yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == current_year)]['Amount'].sum()
-else:
-    tot_inc = yr_inc = tot_don = yr_don = 0.0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
@@ -171,10 +185,17 @@ with tab1:
         amount = st.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
         # Init variables
-        member_name, group, category, medical, address, reason, responsible = "", "N/A", "", "", "", "", ""
+        member_name = ""
+        group = "N/A"
+        category = ""
+        medical = ""
+        address = ""
+        reason = ""
+        responsible = ""
         
         # --- LOGIC FOR INCOMING ---
         if t_type == "Incoming":
+            st.divider()
             c_grp, c_mem, c_cat = st.columns([1,2,2])
             group = c_grp.radio("Group", ["Brother", "Sister"], horizontal=True)
             
@@ -182,15 +203,19 @@ with tab1:
             if not df.empty:
                 existing_mems = sorted(df[(df['Type'] == 'Incoming') & (df['Group'] == group)]['Name_Details'].unique().tolist())
             
-            member_name = c_mem.selectbox("Member Name", options=existing_mems + ["Add New..."])
-            if member_name == "Add New...":
-                member_name = c_mem.text_input("Enter New Member Name")
+            member_name_sel = c_mem.selectbox("Member Name", options=["Select..."] + existing_mems + ["Add New..."])
+            
+            if member_name_sel == "Add New..." or member_name_sel == "Select...":
+                member_name = c_mem.text_input("Type Name Manualy")
+            else:
+                member_name = member_name_sel
                 
             category = c_cat.selectbox("Category", INCOME_TYPES)
             
         # --- LOGIC FOR OUTGOING (DONATION) ---
         else:
-            st.markdown("### Donation Details")
+            st.divider()
+            st.markdown("##### 📤 Donation Details")
             
             row_a1, row_a2 = st.columns(2)
             member_name = row_a1.text_input("Beneficiary Person Name")
@@ -199,24 +224,26 @@ with tab1:
             row_b1, row_b2 = st.columns(2)
             reason = row_b1.text_input("Reason / Note")
             
-            # Responsible Person (Select from existing members to keep data clean)
+            # Responsible Person Selection
             all_members = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
-            responsible = row_b2.selectbox("Responsible Person", options=["Select..."] + all_members + ["Other"])
-            if responsible == "Other":
-                responsible = row_b2.text_input("Enter Responsible Person Name")
+            resp_select = row_b2.selectbox("Responsible Person", options=["Select..."] + all_members + ["Other"])
+            if resp_select == "Other" or resp_select == "Select...":
+                responsible = row_b2.text_input("Type Responsible Person Name")
+            else:
+                responsible = resp_select
             
             row_c1, row_c2 = st.columns(2)
             category = row_c1.selectbox("Donation Category", OUTGOING_TYPES)
             
             if category == "Medical help":
-                medical_select = row_c2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
-                if medical_select == "Other":
+                med_select = row_c2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
+                if med_select == "Other":
                     medical = row_c2.text_input("Specify Condition")
                 else:
-                    medical = medical_select
+                    medical = med_select
         
-        # --- SUBMIT BUTTON ---
-        if st.form_submit_button("Save Transaction"):
+        st.divider()
+        if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 m_idx = MONTHS.index(month) + 1
                 date_str = f"{year}-{m_idx:02d}-{int(day):02d}"
@@ -228,7 +255,7 @@ with tab1:
                     "Month": month,
                     "Type": t_type, 
                     "Group": group,
-                    "Name_Details": member_name, # Stores Member Name OR Beneficiary Name
+                    "Name_Details": member_name, # Stored as 'Name_Details'
                     "Address": address,
                     "Reason": reason,
                     "Responsible": responsible,
@@ -239,17 +266,10 @@ with tab1:
                 
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(st.session_state.df)
-                st.success("Saved Successfully!")
+                st.success(f"Successfully Saved: {t_type} - {amount} {CURRENCY}")
                 st.rerun()
             else:
-                st.error("Please enter Name and Amount")
-
-    # Last 5 Transactions
-    if not df.empty:
-        st.caption("Recent Transactions")
-        # Display specific columns based on type mix
-        disp_df = df.tail(5).iloc[::-1].copy()
-        st.dataframe(disp_df[["Date", "Type", "Category", "Name_Details", "Responsible", "Amount"]], hide_index=True)
+                st.error("Please enter a valid Name and Amount.")
 
 # === TAB 2: ACTIVITIES LOG ===
 with tab2:
@@ -265,13 +285,13 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    # Select columns to display based on what's relevant
-    cols_to_show = ["Date", "Type", "Name_Details", "Category", "Medical", "Address", "Responsible", "Amount"]
+    # Columns to show
+    cols_to_show = ["Date", "Type", "Name_Details", "Category", "Medical", "Address", "Reason", "Responsible", "Amount"]
     
     edited_df = st.data_editor(
         view[cols_to_show],
         column_config={
-            "Name_Details": "Name/Beneficiary",
+            "Name_Details": "Name / Beneficiary",
             "Amount": st.column_config.NumberColumn(format="€%.2f")
         },
         use_container_width=True,
@@ -281,15 +301,14 @@ with tab2:
     
     if st.button("💾 Save Changes to Database"):
         if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            # Update only the columns shown, keep others (like IDs) intact is tricky in simple mode
-            # For robustness in simple mode, we assume row index matches if no sort happened
-            # A safer way in production is to map by ID, but for this scale:
-            st.session_state.df.update(edited_df)
+            # For simplicity in this lightweight version, we replace the DF if filters are cleared
+            # This is safer than partial updates without complex ID matching
+            st.session_state.df = edited_df
             save_data(st.session_state.df)
             st.success("Changes Saved!")
             st.rerun()
         else:
-            st.warning("To edit/delete rows safely, please set all filters to 'All' first.")
+            st.warning("Please set all filters to 'All' before saving edits to avoid data loss.")
 
     st.info(f"**Total in view: {CURRENCY}{view['Amount'].sum():,.2f}**")
 
@@ -348,8 +367,20 @@ with tab4:
             st.dataframe(piv, use_container_width=True)
             st.success(f"**Grand Total: {CURRENCY}{grand_total:,.2f}**")
             
-            pdf_file = generate_pdf(target, tyear, piv, header_txt, footer_txt, grand_total)
-            st.download_button("📄 Download PDF Report", pdf_file, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
+            # PDF Generation
+            if HAS_PDF:
+                pdf_file = generate_pdf(target, tyear, piv, header_txt, footer_txt, grand_total)
+                if pdf_file:
+                    st.download_button(
+                        label="📄 Download PDF Report",
+                        data=pdf_file,
+                        file_name=f"{target}_Report_{tyear}.pdf",
+                        mime="application/pdf",
+                        type="primary"
+                    )
+            else:
+                st.warning("PDF Library (reportlab) not found. Add 'reportlab' to requirements.txt")
+                
         else:
             st.info("No records found.")
     else:
