@@ -32,17 +32,20 @@ MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 
 # --- 2. DATA FUNCTIONS ---
 def load_data():
-    # Define all columns we expect
+    # These are the REQUIRED columns for the new version
     expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
                      "Address", "Reason", "Responsible", "Category", "Medical", "Amount"]
     
     if os.path.exists(DATA_FILE):
         try:
             df = pd.read_csv(DATA_FILE)
-            # Migration: Add missing columns if loading an old CSV
-            for col in expected_cols:
-                if col not in df.columns:
-                    df[col] = ""
+            # FORCE MIGRATION: If old CSV is missing columns, add them now
+            missing_cols = [c for c in expected_cols if c not in df.columns]
+            if missing_cols:
+                for c in missing_cols:
+                    df[c] = "" # Add empty column
+                # Save immediately to fix the file structure
+                df.to_csv(DATA_FILE, index=False)
             return df
         except:
             return pd.DataFrame(columns=expected_cols)
@@ -53,9 +56,7 @@ def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
 def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_total):
-    """Generates a PDF in memory"""
     if not HAS_PDF: return None
-    
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4)
     elements = []
@@ -93,9 +94,6 @@ def generate_pdf(member_name, year, dataframe, header_msg, footer_msg, grand_tot
         ('BACKGROUND', (0, 0), (-1, 0), colors.darkgreen),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -2), colors.beige),
         ('GRID', (0, 0), (-1, -1), 1, colors.black),
         ('FONTNAME', (-2, -1), (-1, -1), 'Helvetica-Bold'),
     ]))
@@ -126,19 +124,11 @@ with st.sidebar:
     
     st.divider()
     
-    uploaded_file = st.file_uploader("Restore Database (Upload CSV)", type=['csv'])
-    if uploaded_file is not None:
-        try:
-            st.session_state.df = pd.read_csv(uploaded_file)
-            save_data(st.session_state.df)
-            st.success("Database Restored!")
-            st.rerun()
-        except:
-            st.error("Invalid CSV file.")
-            
-    if st.button("⚠️ Clear All Data"):
-        st.session_state.df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "Medical", "Amount"])
-        save_data(st.session_state.df)
+    # CLEAR DATA BUTTON (Use this if columns don't show up!)
+    if st.button("⚠️ Reset / Clear Database", type="secondary"):
+        empty_df = pd.DataFrame(columns=["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", "Address", "Reason", "Responsible", "Category", "Medical", "Amount"])
+        save_data(empty_df)
+        st.session_state.df = empty_df
         st.rerun()
 
 # --- 4. DASHBOARD ---
@@ -147,7 +137,6 @@ st.title("Charity Management System")
 df = st.session_state.df
 current_year = int(datetime.now().year)
 
-# Calculations
 tot_inc = 0.0
 yr_inc = 0.0
 tot_don = 0.0
@@ -184,16 +173,11 @@ with tab1:
         
         amount = st.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        # Init variables
-        member_name = ""
-        group = "N/A"
-        category = ""
-        medical = ""
-        address = ""
-        reason = ""
-        responsible = ""
+        # Vars
+        member_name, group, category, medical = "", "N/A", "", ""
+        address, reason, responsible = "", "", ""
         
-        # --- LOGIC FOR INCOMING ---
+        # --- INCOMING LAYOUT ---
         if t_type == "Incoming":
             st.divider()
             c_grp, c_mem, c_cat = st.columns([1,2,2])
@@ -204,77 +188,70 @@ with tab1:
                 existing_mems = sorted(df[(df['Type'] == 'Incoming') & (df['Group'] == group)]['Name_Details'].unique().tolist())
             
             member_name_sel = c_mem.selectbox("Member Name", options=["Select..."] + existing_mems + ["Add New..."])
-            
             if member_name_sel == "Add New..." or member_name_sel == "Select...":
-                member_name = c_mem.text_input("Type Name Manualy")
+                member_name = c_mem.text_input("Type Name Manually")
             else:
                 member_name = member_name_sel
                 
             category = c_cat.selectbox("Category", INCOME_TYPES)
             
-        # --- LOGIC FOR OUTGOING (DONATION) ---
+        # --- OUTGOING LAYOUT ---
         else:
             st.divider()
             st.markdown("##### 📤 Donation Details")
             
-            row_a1, row_a2 = st.columns(2)
-            member_name = row_a1.text_input("Beneficiary Person Name")
-            address = row_a2.text_input("Address / Location")
+            # Row A
+            ra1, ra2 = st.columns(2)
+            member_name = ra1.text_input("Beneficiary Name (Person receiving money)")
+            address = ra2.text_input("Address / Location")
             
-            row_b1, row_b2 = st.columns(2)
-            reason = row_b1.text_input("Reason / Note")
+            # Row B
+            rb1, rb2 = st.columns(2)
+            reason = rb1.text_input("Reason for Donation")
             
-            # Responsible Person Selection
-            all_members = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
-            resp_select = row_b2.selectbox("Responsible Person", options=["Select..."] + all_members + ["Other"])
-            if resp_select == "Other" or resp_select == "Select...":
-                responsible = row_b2.text_input("Type Responsible Person Name")
+            # Responsible Person Logic
+            all_mems = sorted(df[df['Type'] == 'Incoming']['Name_Details'].unique().tolist()) if not df.empty else []
+            resp_sel = rb2.selectbox("Responsible Person", options=["Select..."] + all_mems + ["Other"])
+            if resp_sel == "Other" or resp_sel == "Select...":
+                responsible = rb2.text_input("Type Responsible Name")
             else:
-                responsible = resp_select
+                responsible = resp_sel
             
-            row_c1, row_c2 = st.columns(2)
-            category = row_c1.selectbox("Donation Category", OUTGOING_TYPES)
+            # Row C
+            rc1, rc2 = st.columns(2)
+            category = rc1.selectbox("Donation Category", OUTGOING_TYPES)
             
             if category == "Medical help":
-                med_select = row_c2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
-                if med_select == "Other":
-                    medical = row_c2.text_input("Specify Condition")
+                med_sel = rc2.selectbox("Medical Condition", MEDICAL_SUB_TYPES)
+                if med_sel == "Other":
+                    medical = rc2.text_input("Specify Condition")
                 else:
-                    medical = med_select
+                    medical = med_sel
         
-        st.divider()
+        # SUBMIT
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 m_idx = MONTHS.index(month) + 1
                 date_str = f"{year}-{m_idx:02d}-{int(day):02d}"
                 
                 new_row = {
-                    "ID": str(uuid.uuid4()), 
-                    "Date": date_str,
-                    "Year": int(year), 
-                    "Month": month,
-                    "Type": t_type, 
-                    "Group": group,
-                    "Name_Details": member_name, # Stored as 'Name_Details'
-                    "Address": address,
-                    "Reason": reason,
-                    "Responsible": responsible,
-                    "Category": category, 
-                    "Medical": medical, 
-                    "Amount": amount
+                    "ID": str(uuid.uuid4()), "Date": date_str, "Year": int(year), "Month": month,
+                    "Type": t_type, "Group": group, 
+                    "Name_Details": member_name, 
+                    "Address": address, "Reason": reason, "Responsible": responsible,
+                    "Category": category, "Medical": medical, "Amount": amount
                 }
                 
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(st.session_state.df)
-                st.success(f"Successfully Saved: {t_type} - {amount} {CURRENCY}")
+                st.success("Saved Successfully!")
                 st.rerun()
             else:
-                st.error("Please enter a valid Name and Amount.")
+                st.error("Please enter Name and Amount")
 
 # === TAB 2: ACTIVITIES LOG ===
 with tab2:
     st.subheader("Activities Log")
-    
     f1, f2, f3, f4 = st.columns(4)
     f_yr = f1.selectbox("Filter Year", ["All"] + YEAR_LIST)
     f_tp = f2.selectbox("Filter Type", ["All", "Incoming", "Outgoing"])
@@ -285,13 +262,13 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    # Columns to show
-    cols_to_show = ["Date", "Type", "Name_Details", "Category", "Medical", "Address", "Reason", "Responsible", "Amount"]
+    # Columns to display
+    cols = ["Date", "Type", "Category", "Name_Details", "Responsible", "Medical", "Address", "Amount"]
     
     edited_df = st.data_editor(
-        view[cols_to_show],
+        view[cols],
         column_config={
-            "Name_Details": "Name / Beneficiary",
+            "Name_Details": "Name/Beneficiary",
             "Amount": st.column_config.NumberColumn(format="€%.2f")
         },
         use_container_width=True,
@@ -299,18 +276,14 @@ with tab2:
         key="editor"
     )
     
-    if st.button("💾 Save Changes to Database"):
+    if st.button("💾 Save Changes"):
         if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            # For simplicity in this lightweight version, we replace the DF if filters are cleared
-            # This is safer than partial updates without complex ID matching
-            st.session_state.df = edited_df
+            st.session_state.df.update(edited_df) # Update matching indices
             save_data(st.session_state.df)
-            st.success("Changes Saved!")
+            st.success("Updated!")
             st.rerun()
         else:
-            st.warning("Please set all filters to 'All' before saving edits to avoid data loss.")
-
-    st.info(f"**Total in view: {CURRENCY}{view['Amount'].sum():,.2f}**")
+            st.warning("Set all filters to 'All' to save edits.")
 
 # === TAB 3: ANALYSIS ===
 with tab3:
@@ -326,10 +299,9 @@ with tab3:
         
         if not adf.empty:
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
-            
             c1, c2 = st.columns([2,1])
             with c1:
-                fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True, title="Contribution Analysis")
+                fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True)
                 st.plotly_chart(fig, use_container_width=True)
             with c2:
                 st.dataframe(stats, hide_index=True, use_container_width=True)
@@ -340,7 +312,6 @@ with tab3:
 # === TAB 4: MEMBER MATRIX ===
 with tab4:
     st.subheader("Member Contribution Report")
-    
     mc1, mc2, mc3 = st.columns(3)
     mat_grp = mc1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mat_grp")
     
@@ -367,20 +338,11 @@ with tab4:
             st.dataframe(piv, use_container_width=True)
             st.success(f"**Grand Total: {CURRENCY}{grand_total:,.2f}**")
             
-            # PDF Generation
             if HAS_PDF:
                 pdf_file = generate_pdf(target, tyear, piv, header_txt, footer_txt, grand_total)
-                if pdf_file:
-                    st.download_button(
-                        label="📄 Download PDF Report",
-                        data=pdf_file,
-                        file_name=f"{target}_Report_{tyear}.pdf",
-                        mime="application/pdf",
-                        type="primary"
-                    )
+                st.download_button("📄 Download PDF Report", pdf_file, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
             else:
-                st.warning("PDF Library (reportlab) not found. Add 'reportlab' to requirements.txt")
-                
+                st.warning("Install 'reportlab' to download PDFs.")
         else:
             st.info("No records found.")
     else:
