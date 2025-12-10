@@ -25,9 +25,13 @@ USER_FILE = "users.json"
 MEMBERS_FILE = "members.json"
 CURRENCY = "€"
 
-INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
-OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
+# FUND SOURCES (Used for both Income and Outgoing Source)
+FUND_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
+
+# USAGE TYPES (How the money is spent)
+OUTGOING_USAGES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship Distribution", "Other"]
 MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
+
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
@@ -120,6 +124,18 @@ def load_data():
 def save_data(df):
     df.to_csv(CURRENT_DB_FILE, index=False)
 
+def get_fund_balance(df, fund_category):
+    """Calculates live balance for a specific fund"""
+    if df.empty: return 0.0
+    
+    # Ensure amount is numeric
+    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
+    
+    income = df[(df['Type'] == 'Incoming') & (df['Category'] == fund_category)]['Amount'].sum()
+    expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
+    
+    return income - expense
+
 # PDF Generator
 def generate_pdf(member_name, member_details, year, dataframe, header_msg, footer_msg, grand_total, monthly_summary):
     if not HAS_PDF: return None
@@ -128,16 +144,14 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements = []
     styles = getSampleStyleSheet()
     
-    # Header
     elements.append(Paragraph(f"Contribution Report", styles['Title']))
-    elements.append(Spacer(1, 10))
     elements.append(Paragraph(f"<b>Member:</b> {member_name} | <b>Year:</b> {year}", styles['Normal']))
     elements.append(Paragraph(f"<b>Details:</b> {member_details.get('address','-')} | {member_details.get('phone','-')}", styles['Normal']))
     elements.append(Spacer(1, 15))
     
     if header_msg: elements.append(Paragraph(header_msg, styles['Italic'])); elements.append(Spacer(1, 12))
     
-    # Transactions Table
+    # Detail Table
     elements.append(Paragraph("Detailed Transactions", styles['Heading3']))
     df_reset = dataframe.reset_index()
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
@@ -159,13 +173,10 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements.append(Paragraph("Monthly Summary", styles['Heading3']))
     summary_data = [["Month", "Total Amount"]]
     for index, row in monthly_summary.iterrows():
-        # Handle month index safely
         try:
             m_idx = int(row['Month']) - 1
             m_name = MONTH_NAMES[m_idx] if 0 <= m_idx < 12 else str(row['Month'])
-        except:
-            m_name = str(row['Month'])
-            
+        except: m_name = str(row['Month'])
         summary_data.append([m_name, f"{row['Amount']:,.2f}"])
     
     t2 = Table(summary_data, colWidths=[150, 100], hAlign='LEFT')
@@ -173,7 +184,6 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements.append(t2)
     elements.append(Spacer(1, 30))
 
-    # Footer
     if footer_msg: elements.append(Paragraph(footer_msg, styles['Normal'])); elements.append(Spacer(1, 30))
     elements.append(Paragraph("_" * 30, styles['Normal'])); elements.append(Paragraph("Authorized Signature", styles['Normal']))
     
@@ -232,18 +242,15 @@ curr_yr = int(datetime.now().year)
 
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-    tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
-    yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
-    tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
-    yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
-else:
-    tot_inc = yr_inc = tot_don = yr_don = 0.0
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
-c2.metric(f"Income {curr_yr}", f"{CURRENCY}{yr_inc:,.2f}")
-c3.metric("Total Donation", f"{CURRENCY}{tot_don:,.2f}")
-c4.metric(f"Donation {curr_yr}", f"{CURRENCY}{yr_don:,.2f}")
+# 1. Calculate Fund Balances
+st.subheader("💰 Live Fund Balances")
+fund_cols = st.columns(len(FUND_TYPES))
+for i, fund in enumerate(FUND_TYPES):
+    bal = get_fund_balance(df, fund)
+    # Determine color (Red if negative, Green if positive)
+    delta_color = "normal" if bal >= 0 else "inverse" 
+    fund_cols[i].metric(label=fund, value=f"{CURRENCY}{bal:,.2f}")
 
 st.divider()
 
@@ -281,33 +288,36 @@ with tab1:
     sel_sub_category = ""
     sel_medical = ""
     out_grp = "N/A"
+    current_balance = 0.0
     
     if t_type == "Outgoing":
         st.info("ℹ️ Donation Details:")
-        col_grp, col_cat = st.columns(2)
-        out_grp = col_grp.radio("Donation Group:", ["Brother", "Sister"], horizontal=True, key="out_grp")
-        category_selection = col_cat.selectbox("Donation Category", INCOME_TYPES, key="out_cat")
+        col_fund, col_use = st.columns(2)
         
-        if category_selection == "Sadaka":
-            sub_cat_selection = st.selectbox("Sadaka Type", ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"], key="out_sub")
-            if sub_cat_selection == "Medical help":
-                med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
-                sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
+        # 1. Select Fund Source (Sadaka, Zakat, etc) to check balance
+        sel_category = col_fund.selectbox("Select Fund Source", FUND_TYPES, key="out_cat")
+        
+        # Show Balance immediately
+        current_balance = get_fund_balance(df, sel_category)
+        if current_balance > 0:
+            col_fund.success(f"Available Balance: {CURRENCY}{current_balance:,.2f}")
+        else:
+            col_fund.error(f"Insufficient Funds: {CURRENCY}{current_balance:,.2f}")
+        
+        # 2. Select Usage (Medical, Financial etc)
+        sel_sub_category = col_use.selectbox("Donation Usage", OUTGOING_USAGES, key="out_sub")
+        
+        # 3. Medical Specifics
+        if sel_sub_category == "Medical help":
+            med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
+            sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
     
     with st.form("txn_form", clear_on_submit=True):
         c_date, c_amt = st.columns(2)
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        # Init Variables to Avoid NameError
-        member_name = ""
-        address = ""
-        reason = ""
-        responsible = ""
-        category = ""
-        sub_category = ""
-        medical = ""
-        group = ""
+        member_name, address, reason, responsible = "", "", "", ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -316,26 +326,36 @@ with tab1:
             valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == group_sel]
             valid_mems.sort()
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
-            category = st.selectbox("Category", INCOME_TYPES)
+            
+            # Map Incoming directly
+            category = st.selectbox("Fund Category", FUND_TYPES)
             group = group_sel
+            
+            # Sub/Medical empty for income
+            sub_category = ""
+            medical = ""
+            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
             member_name = c1.text_input("Beneficiary Name")
             address = c2.text_input("Address")
             c3, c4 = st.columns(2)
-            reason = c3.text_input("Reason")
+            reason = c3.text_input("Reason / Note")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
             
             # Map external to internal variables
-            category = category_selection
-            sub_category = sub_cat_selection
+            category = sel_category # This is the Fund (Sadaka/Zakat)
+            sub_category = sel_sub_category # This is Usage (Medical/Financial)
             medical = sel_medical
-            group = out_grp
+            group = "N/A"
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
-            if amount > 0 and member_name:
+            # BALANCE CHECK for Outgoing
+            if t_type == "Outgoing" and amount > current_balance:
+                st.error(f"❌ Transaction Failed! Insufficient funds in {category}. Available: {CURRENCY}{current_balance:,.2f}")
+            elif amount > 0 and member_name:
                 new_row = {
                     "ID": str(uuid.uuid4()), "Date": str(date_val), "Year": int(date_val.year), "Month": int(date_val.month),
                     "Type": t_type, "Group": group, "Name_Details": member_name, 
@@ -381,7 +401,7 @@ with tab3:
         st.markdown("### 📥 Income Analysis")
         c1, c2 = st.columns(2)
         grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="a")
-        cat = c2.selectbox("Category", ["All"] + INCOME_TYPES)
+        cat = c2.selectbox("Category", ["All"] + FUND_TYPES)
         
         adf = df[df['Type'] == 'Incoming']
         if grp != "All": adf = adf[adf['Group'] == grp]
@@ -400,24 +420,19 @@ with tab3:
         out_df = df[df['Type'] == 'Outgoing']
         
         if not out_df.empty:
-            col_sad, col_med = st.columns(2)
+            col_fund, col_use = st.columns(2)
             
-            with col_sad:
-                st.write("**Sadaka Breakdown**")
-                sadaka_df = out_df[out_df['Category'] == 'Sadaka']
-                if not sadaka_df.empty:
-                    fig_sad = px.pie(sadaka_df, values='Amount', names='SubCategory', title="Sadaka Types")
-                    st.plotly_chart(fig_sad, use_container_width=True)
-                else: st.info("No Sadaka donations.")
+            with col_fund:
+                st.write("**Spending by Fund Source**")
+                fig_fund = px.pie(out_df, values='Amount', names='Category', title="Fund Source Usage")
+                st.plotly_chart(fig_fund, use_container_width=True)
             
-            with col_med:
-                st.write("**Medical Breakdown**")
-                med_df = out_df[out_df['SubCategory'] == 'Medical help']
-                if not med_df.empty:
-                    fig_med = px.pie(med_df, values='Amount', names='Medical', title="Medical Conditions")
-                    st.plotly_chart(fig_med, use_container_width=True)
-                else: st.info("No Medical donations.")
-        else: st.info("No donations.")
+            with col_use:
+                st.write("**Spending by Usage**")
+                fig_use = px.pie(out_df, values='Amount', names='SubCategory', title="Donation Purposes")
+                st.plotly_chart(fig_use, use_container_width=True)
+        else:
+            st.info("No donations recorded yet.")
 
 # === TAB 4: MEMBER REPORT ===
 with tab4:
@@ -457,7 +472,7 @@ with tab4:
             if HAS_PDF:
                 pdf = generate_pdf(target, mem_info, tyear, piv, h, f, g_tot, monthly_sum)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report.pdf", "application/pdf")
-        else: st.info("No transaction records found.")
+        else: st.info("No transactions found.")
     else: st.info("No members found.")
 
 # === TAB 5: OVERALL SUMMARY ===
