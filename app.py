@@ -32,7 +32,7 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
                "July", "August", "September", "October", "November", "December"]
 YEAR_LIST = [str(y) for y in range(2023, 2101)]
 
-# --- 2. FILE & AUTH FUNCTIONS ---
+# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -81,14 +81,12 @@ if not st.session_state.authenticated:
         with st.form("login"):
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
-            # Submit button MUST be inside the with st.form block
             if st.form_submit_button("Login"):
                 if check_login(u, p):
                     st.session_state.authenticated = True
                     st.session_state.username = u
                     st.rerun()
                 else: st.error("Invalid credentials")
-                
     with tabs[1]:
         with st.form("reg"):
             nu = st.text_input("New Username")
@@ -130,6 +128,7 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements = []
     styles = getSampleStyleSheet()
     
+    # Header
     elements.append(Paragraph(f"Contribution Report", styles['Title']))
     elements.append(Spacer(1, 10))
     elements.append(Paragraph(f"<b>Member:</b> {member_name} | <b>Year:</b> {year}", styles['Normal']))
@@ -138,7 +137,7 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     
     if header_msg: elements.append(Paragraph(header_msg, styles['Italic'])); elements.append(Spacer(1, 12))
     
-    # Detail Table
+    # Transactions Table
     elements.append(Paragraph("Detailed Transactions", styles['Heading3']))
     df_reset = dataframe.reset_index()
     data = [df_reset.columns.to_list()] + df_reset.values.tolist()
@@ -160,8 +159,13 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements.append(Paragraph("Monthly Summary", styles['Heading3']))
     summary_data = [["Month", "Total Amount"]]
     for index, row in monthly_summary.iterrows():
-        m_idx = int(row['Month']) - 1
-        m_name = MONTH_NAMES[m_idx] if 0 <= m_idx < 12 else str(row['Month'])
+        # Handle month index safely
+        try:
+            m_idx = int(row['Month']) - 1
+            m_name = MONTH_NAMES[m_idx] if 0 <= m_idx < 12 else str(row['Month'])
+        except:
+            m_name = str(row['Month'])
+            
         summary_data.append([m_name, f"{row['Amount']:,.2f}"])
     
     t2 = Table(summary_data, colWidths=[150, 100], hAlign='LEFT')
@@ -169,6 +173,7 @@ def generate_pdf(member_name, member_details, year, dataframe, header_msg, foote
     elements.append(t2)
     elements.append(Spacer(1, 30))
 
+    # Footer
     if footer_msg: elements.append(Paragraph(footer_msg, styles['Normal'])); elements.append(Spacer(1, 30))
     elements.append(Paragraph("_" * 30, styles['Normal'])); elements.append(Paragraph("Authorized Signature", styles['Normal']))
     
@@ -225,13 +230,14 @@ st.title("Charity Management System")
 df = st.session_state.df
 curr_yr = int(datetime.now().year)
 
-tot_inc = 0.0; yr_inc = 0.0; tot_don = 0.0; yr_don = 0.0
 if not df.empty:
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
     tot_inc = df[df['Type'] == 'Incoming']['Amount'].sum()
     yr_inc = df[(df['Type'] == 'Incoming') & (df['Year'] == curr_yr)]['Amount'].sum()
     tot_don = df[df['Type'] == 'Outgoing']['Amount'].sum()
     yr_don = df[(df['Type'] == 'Outgoing') & (df['Year'] == curr_yr)]['Amount'].sum()
+else:
+    tot_inc = yr_inc = tot_don = yr_don = 0.0
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Total Income", f"{CURRENCY}{tot_inc:,.2f}")
@@ -267,9 +273,9 @@ with tab1:
     st.markdown("---")
     st.write("#### New Entry")
     
-    # EXTERNAL SELECTORS (IMPORTANT: Must be outside the form to update dynamically)
-    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="main_type_radio")
+    t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True)
     
+    # EXTERNAL VARIABLES
     sel_group = "N/A"
     sel_category = ""
     sel_sub_category = ""
@@ -286,17 +292,22 @@ with tab1:
             sub_cat_selection = st.selectbox("Sadaka Type", ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"], key="out_sub")
             if sub_cat_selection == "Medical help":
                 med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
-                if med_choice == "Other":
-                    sel_medical = st.text_input("Specify", key="out_med_txt")
-                else:
-                    sel_medical = med_choice
+                sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
     
     with st.form("txn_form", clear_on_submit=True):
         c_date, c_amt = st.columns(2)
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        member_name, address, reason, responsible = "", "", "", ""
+        # Init Variables to Avoid NameError
+        member_name = ""
+        address = ""
+        reason = ""
+        responsible = ""
+        category = ""
+        sub_category = ""
+        medical = ""
+        group = ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -316,9 +327,13 @@ with tab1:
             reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            category, sub_category, medical, group = category_selection, sub_cat_selection, sel_medical, out_grp
+            
+            # Map external to internal variables
+            category = category_selection
+            sub_category = sub_cat_selection
+            medical = sel_medical
+            group = out_grp
         
-        # SUBMIT BUTTON MUST BE INDENTED HERE
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if amount > 0 and member_name:
                 new_row = {
@@ -331,7 +346,7 @@ with tab1:
                 save_data(st.session_state.df)
                 st.success("Saved!")
                 st.rerun()
-            else: st.error("Name and Amount required.")
+            else: st.error("Name and Amount required")
 
 # === TAB 2: LOG ===
 with tab2:
@@ -404,7 +419,7 @@ with tab3:
                 else: st.info("No Medical donations.")
         else: st.info("No donations.")
 
-# === TAB 4: REPORT ===
+# === TAB 4: MEMBER REPORT ===
 with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
@@ -432,7 +447,7 @@ with tab4:
             st.dataframe(piv, use_container_width=True)
             st.success(f"Grand Total: {CURRENCY}{g_tot:,.2f}")
             
-            # Prepare Monthly Summary for PDF
+            # Prepare monthly summary for PDF
             monthly_sum = mdf.groupby('Month')['Amount'].sum().reset_index()
             
             with st.expander("PDF Options"):
