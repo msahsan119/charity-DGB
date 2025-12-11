@@ -129,30 +129,32 @@ def get_fund_balance(df, fund_category):
     expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
     return income - expense
 
-# --- HELPER: Create Pie Chart Image for PDF ---
+# --- HELPER: HIGH RES PIE CHART ---
 def create_pie_chart_image(data_series, title):
     if data_series.empty: return None
     
-    # Create Matplotlib Figure
-    plt.figure(figsize=(5, 4))
-    # Use a nice color map
+    # Large figure size for high resolution text
+    plt.figure(figsize=(6, 6))
+    
+    # Plot
     wedges, texts, autotexts = plt.pie(
         data_series, 
         labels=data_series.index, 
         autopct='%1.1f%%', 
         startangle=140, 
-        textprops={'fontsize': 9},
-        colors=plt.cm.Pastel1.colors
+        colors=plt.cm.Pastel1.colors,
+        textprops={'fontsize': 10}
     )
-    plt.title(title, fontsize=12, fontweight='bold')
+    plt.title(title, fontsize=14, fontweight='bold')
     
-    # Save to Buffer
+    # Save to Buffer with high DPI
     img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=300) # High Resolution
+    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=400)
     img_buf.seek(0)
     plt.close()
     
-    return Image(img_buf, width=4*inch, height=3*inch, hAlign='CENTER')
+    # Return ReportLab Image (resized for PDF fit)
+    return Image(img_buf, width=3.2*inch, height=3.2*inch)
 
 # --- ADVANCED PDF GENERATOR ---
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
@@ -183,11 +185,9 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(Paragraph(line, styles['Normal']))
     
     elements.append(Spacer(1, 10))
-    # Highlight Total
     elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", styles['Highlight']))
     elements.append(Spacer(1, 15))
     
-    # 3. Appreciation Box
     if header_msg:
         elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
         elements.append(Spacer(1, 15))
@@ -211,7 +211,6 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('GRID', (0,0), (-1,-1), 1, colors.black),
         ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER')
     ]))
     elements.append(t1)
     elements.append(Spacer(1, 20))
@@ -235,35 +234,53 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('GRID', (0,0), (-1,-1), 1, colors.black),
         ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
-        ('ALIGN', (0,0), (-1,-1), 'CENTER')
     ]))
     elements.append(t2)
     elements.append(Spacer(1, 25))
 
-    # 6. Charts Section
+    # 6. CHARTS SECTION (2 ROWS)
     elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", styles['Heading3']))
-    
-    # Chart 1: By Fund Source (Category)
+    elements.append(Spacer(1, 10))
+
+    # GENERATE IMAGES
+    # 1. Fund Source
     fund_stats = df_global_year.groupby("Category")['Amount'].sum()
-    img1 = create_pie_chart_image(fund_stats, "Distribution by Fund Source")
-    if img1: elements.append(img1)
+    img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
     
-    elements.append(Spacer(1, 15))
-
-    # Chart 2: By Usage (SubCategory)
+    # 2. Usage
     usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
-    img2 = create_pie_chart_image(usage_stats, "Distribution by Usage")
-    if img2: elements.append(img2)
+    img_usage = create_pie_chart_image(usage_stats, "By Usage")
     
-    elements.append(Spacer(1, 15))
-
-    # Chart 3: Medical Breakdown
+    # 3. Medical
+    img_med = None
     if not medical_df.empty:
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
-        img3 = create_pie_chart_image(med_stats, "Medical Breakdown")
-        if img3: elements.append(img3)
+        img_med = create_pie_chart_image(med_stats, "Medical Breakdown")
 
-    elements.append(Spacer(1, 25))
+    # LAYOUT: ROW 1 (Fund | Usage)
+    if img_fund and img_usage:
+        # Put images in a 1-row, 2-column table
+        chart_table_1 = Table([[img_fund, img_usage]], colWidths=[3.5*inch, 3.5*inch])
+        chart_table_1.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        elements.append(chart_table_1)
+        elements.append(Spacer(1, 15))
+    elif img_fund:
+        elements.append(img_fund)
+    elif img_usage:
+        elements.append(img_usage)
+
+    # LAYOUT: ROW 2 (Medical - Centered)
+    if img_med:
+        # Using a table to center align the single image easily
+        chart_table_2 = Table([[img_med]], colWidths=[7*inch])
+        chart_table_2.setStyle(TableStyle([
+            ('ALIGN', (0,0), (-1,-1), 'CENTER')
+        ]))
+        elements.append(chart_table_2)
+        elements.append(Spacer(1, 25))
 
     # 7. Footer & Signature
     if footer_msg:
@@ -400,6 +417,7 @@ with tab1:
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
         member_name, address, reason, responsible = "", "", "", ""
+        category, sub_category, medical, group = "", "", "", ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -410,15 +428,13 @@ with tab1:
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
             category = st.selectbox("Category", INCOME_TYPES)
             group = group_sel
-            sub_category = ""
-            medical = ""
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
             member_name = c1.text_input("Beneficiary Name")
             address = c2.text_input("Address")
             c3, c4 = st.columns(2)
-            reason = c3.text_input("Reason / Note")
+            reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
             category, sub_category, medical, group = sel_category, sel_sub_category, sel_medical, out_grp
@@ -472,13 +488,12 @@ with tab3:
         c1, c2 = st.columns(2)
         grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="a")
         cat = c2.selectbox("Category", ["All"] + INCOME_TYPES)
-        
         adf = df[df['Type'] == 'Incoming']
         if grp != "All": adf = adf[adf['Group'] == grp]
         if cat != "All": adf = adf[adf['Category'] == cat]
         
         if not adf.empty:
-            # --- CHANGED: TABLE INSTEAD OF CHART ---
+            # --- TABLE VIEW INSTEAD OF CHART ---
             st.dataframe(adf[["Date", "Name_Details", "Group", "Category", "Amount"]], use_container_width=True)
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
             st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
@@ -498,12 +513,11 @@ with tab3:
                 fig_use = px.pie(out_df, values='Amount', names='SubCategory')
                 st.plotly_chart(fig_use, use_container_width=True)
             
-            st.write("**Medical Breakdown**")
             med_df = out_df[out_df['SubCategory'] == 'Medical help']
             if not med_df.empty:
+                st.write("**Medical Breakdown**")
                 fig_med = px.pie(med_df, values='Amount', names='Medical')
                 st.plotly_chart(fig_med, use_container_width=True)
-            else: st.info("No Medical data")
         else: st.info("No donations.")
 
 # === TAB 4: MEMBER REPORT ===
@@ -511,7 +525,7 @@ with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
     mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
-    reg_mems = [name for name, d in st.session_state.members_db.items() if (mat_grp == "All" or d.get('group') == mat_grp)]
+    reg_mems = [n for n, d in st.session_state.members_db.items() if (mat_grp == "All" or d.get('group') == mat_grp)]
     trans_mems = df[df['Type'] == 'Incoming']
     if mat_grp != "All": trans_mems = trans_mems[trans_mems['Group'] == mat_grp]
     all_visible_mems = sorted(list(set(reg_mems + trans_mems['Name_Details'].unique().tolist())))
@@ -531,7 +545,7 @@ with tab4:
         i2.success(f"**Lifetime Total:** {CURRENCY}{lifetime_total:,.2f}")
         
         with st.container():
-            st.markdown(f"**Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')}")
+            st.markdown(f"**Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')} | {mem_info.get('email', '-')}")
 
         st.divider()
         with st.expander("PDF Options"):
@@ -540,7 +554,6 @@ with tab4:
 
         if tyear == "All":
             year_df = all_time_df
-            year_filter = None
             global_out_year = df[df['Type'] == 'Outgoing']
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
         else:
@@ -558,7 +571,7 @@ with tab4:
             if HAS_PDF:
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
                                    year_df, global_out_year, medical_df_year, h, f)
-                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf")
+                st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
         else: st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
 
@@ -566,7 +579,6 @@ with tab4:
 with tab5:
     st.subheader("Overall Monthly Summary")
     sum_year = st.selectbox("Select Year for Summary", sorted(list(set(df['Year'].astype(str)))))
-    
     if sum_year:
         year_df = df[df['Year'] == int(sum_year)]
         monthly_stats = year_df.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
@@ -584,10 +596,8 @@ with tab5:
             summary_table.append({"Month": MONTH_NAMES[m_num-1], "Income": inc, "Donation": don, "Balance": bal})
             t_in += inc; t_out += don; t_bal += bal
             
-        sum_df = pd.DataFrame(summary_table)
-        st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
+        st.dataframe(pd.DataFrame(summary_table).style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
         c1, c2, c3 = st.columns(3)
         c1.metric("Year Income", f"€{t_in:,.2f}")
         c2.metric("Year Donation", f"€{t_out:,.2f}")
         c3.metric("Net Balance", f"€{t_bal:,.2f}")
-        
