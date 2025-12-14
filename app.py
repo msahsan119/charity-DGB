@@ -9,16 +9,13 @@ from datetime import datetime
 import plotly.express as px
 import matplotlib.pyplot as plt
 
-# --- REPORTLAB IMPORTS (For PDF) ---
+# --- REPORTLAB IMPORTS ---
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
     HAS_PDF = True
 except ImportError:
     HAS_PDF = False
@@ -29,7 +26,6 @@ st.set_page_config(page_title="Charity Management System", layout="wide", page_i
 USER_FILE = "users.json"
 MEMBERS_FILE = "members.json"
 CURRENCY = "€"
-FONT_FILE_NAME = "custom_font.ttf" # Temp file for font
 
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
 OUTGOING_TYPES = ["Medical help", "Financial help", "Karje hasana", "Mosque", "Dead body", "Scholarship"]
@@ -37,12 +33,20 @@ MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 
-# --- BENGALI QUOTES ---
-QURAN_QUOTE = """যারা আল্লাহর পথে নিজেদের মাল ব্যয় করে, তাদের (দানের) তুলনা সেই বীজের মত, যাত্থেকে সাতটি শীষ জন্মিল, প্রত্যেক শীষে একশত করে দানা এবং আল্লাহ যাকে ইচ্ছে করেন, বর্ধিত হারে দিয়ে থাকেন। বস্তুতঃ আল্লাহ প্রাচুর্যের অধিকারী, জ্ঞানময়। (সুরা বাকারাহ ২৬১)"""
+# --- 2. SESSION STATE INITIALIZATION (CRITICAL FIX) ---
+# We initialize ALL variables here to prevent AttributeErrors
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'username' not in st.session_state:
+    st.session_state.username = ""
+if 'show_reset_confirm' not in st.session_state:
+    st.session_state.show_reset_confirm = False
+if 'df' not in st.session_state:
+    st.session_state.df = pd.DataFrame()
+if 'members_db' not in st.session_state:
+    st.session_state.members_db = {}
 
-HADITH_QUOTE = """আদী ইব্‌ন হাতিম (রাঃ) থেকে বর্ণিতঃ নবী (সাল্লাল্লাহু ‘আলাইহি ওয়া সাল্লাম) থেকে বর্ণিত। তিনি বলেন তোমরা জাহান্নামের আগুন থেকে বাঁচ (নিজেদের রক্ষা কর) যদিও তা খেজুরের টুকরা দ্বারাও হয়। (সুনানে আন-নাসায়ী, হাদিস নং ২৫৫২)"""
-
-# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
+# --- 3. FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -65,10 +69,158 @@ def check_login(username, password):
     if username in users and users[username] == hash_password(password): return True
     return False
 
-# --- 3. SESSION INIT ---
-if 'authenticated' not in st.session_state: st.session_state.authenticated = False
-if 'username' not in st.session_state: st.session_state.username = ""
-if 'custom_font_path' not in st.session_state: st.session_state.custom_font_path = None
+def load_data():
+    if not st.session_state.username: return pd.DataFrame()
+    db_file = get_user_db_file(st.session_state.username)
+    
+    expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
+                     "Address", "Reason", "Responsible", "Category", "SubCategory", "Medical", "Amount"]
+    
+    if os.path.exists(db_file):
+        try:
+            df = pd.read_csv(db_file)
+            for col in expected_cols:
+                if col not in df.columns: df[col] = ""
+            return df
+        except: return pd.DataFrame(columns=expected_cols)
+    return pd.DataFrame(columns=expected_cols)
+
+def save_data(df):
+    if st.session_state.username:
+        db_file = get_user_db_file(st.session_state.username)
+        df.to_csv(db_file, index=False)
+
+def get_fund_balance(df, fund_category):
+    if df.empty: return 0.0
+    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
+    income = df[(df['Type'] == 'Incoming') & (df['Category'] == fund_category)]['Amount'].sum()
+    expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
+    return income - expense
+
+def create_pie_chart_image(data_series, title):
+    if data_series.empty: return None
+    plt.figure(figsize=(6, 6))
+    wedges, texts, autotexts = plt.pie(
+        data_series, labels=data_series.index, autopct='%1.1f%%', 
+        startangle=140, colors=plt.cm.Pastel1.colors, textprops={'fontsize': 10}
+    )
+    plt.title(title, fontsize=14, fontweight='bold')
+    img_buf = io.BytesIO()
+    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=400)
+    img_buf.seek(0)
+    plt.close()
+    return Image(img_buf, width=3.2*inch, height=3.2*inch)
+
+def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
+                 df_member_year, df_global_year, medical_df, header_msg, footer_msg):
+    if not HAS_PDF: return None
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    styles.add(ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12))
+
+    elements.append(Paragraph(f"Member Contribution Report", styles['Title']))
+    elements.append(Spacer(1, 10))
+
+    profile_text = [
+        f"<b>Name:</b> {member_name}",
+        f"<b>Member Since:</b> {member_since}",
+        f"<b>Address:</b> {member_details.get('address', '-')}",
+        f"<b>Phone/Email:</b> {member_details.get('phone', '-')} / {member_details.get('email', '-')}",
+        f"<b>Report Year:</b> {year}"
+    ]
+    for line in profile_text:
+        elements.append(Paragraph(line, styles['Normal']))
+    
+    elements.append(Spacer(1, 10))
+    elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", styles['Highlight']))
+    elements.append(Spacer(1, 15))
+    
+    if header_msg:
+        elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
+        elements.append(Spacer(1, 15))
+
+    elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
+    
+    mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
+    t1_data = [["Month", "Amount"]]
+    t1_total = 0
+    for m_num in range(1, 13):
+        row = mem_monthly[mem_monthly['Month'] == m_num]
+        amt = row['Amount'].sum() if not row.empty else 0.0
+        t1_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
+        t1_total += amt
+    t1_data.append(["TOTAL", f"{t1_total:,.2f}"])
+
+    t1 = Table(t1_data, colWidths=[200, 150], hAlign='LEFT')
+    t1.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.darkgreen),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+    elements.append(t1)
+    elements.append(Spacer(1, 20))
+
+    elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
+    global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
+    t2_data = [["Month", "Total Distributed"]]
+    t2_total = 0
+    for m_num in range(1, 13):
+        row = global_monthly[global_monthly['Month'] == m_num]
+        amt = row['Amount'].sum() if not row.empty else 0.0
+        t2_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
+        t2_total += amt
+    t2_data.append(["TOTAL", f"{t2_total:,.2f}"])
+
+    t2 = Table(t2_data, colWidths=[200, 150], hAlign='LEFT')
+    t2.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.navy),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
+    ]))
+    elements.append(t2)
+    elements.append(Spacer(1, 25))
+
+    elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", styles['Heading3']))
+    elements.append(Spacer(1, 10))
+
+    fund_stats = df_global_year.groupby("Category")['Amount'].sum()
+    img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
+    usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
+    img_usage = create_pie_chart_image(usage_stats, "By Usage")
+    img_med = None
+    if not medical_df.empty:
+        med_stats = medical_df.groupby("Medical")['Amount'].sum()
+        img_med = create_pie_chart_image(med_stats, "Medical Breakdown")
+
+    if img_fund and img_usage:
+        chart_table_1 = Table([[img_fund, img_usage]], colWidths=[3.5*inch, 3.5*inch])
+        chart_table_1.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
+        elements.append(chart_table_1)
+        elements.append(Spacer(1, 15))
+    elif img_fund: elements.append(img_fund)
+    elif img_usage: elements.append(img_usage)
+
+    if img_med:
+        chart_table_2 = Table([[img_med]], colWidths=[7*inch])
+        chart_table_2.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
+        elements.append(chart_table_2)
+        elements.append(Spacer(1, 25))
+
+    if footer_msg:
+        elements.append(Paragraph(footer_msg, styles['Normal']))
+        elements.append(Spacer(1, 30))
+
+    elements.append(Paragraph("_" * 30, styles['Normal']))
+    elements.append(Paragraph("Authorized Signature", styles['Normal']))
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
 
 # =========================================================
 # LOGIN SCREEN
@@ -113,192 +265,13 @@ if not st.session_state.authenticated:
 # =========================================================
 # MAIN APP
 # =========================================================
-CURRENT_DB_FILE = get_user_db_file(st.session_state.username)
 
-def load_data():
-    expected_cols = ["ID", "Date", "Year", "Month", "Type", "Group", "Name_Details", 
-                     "Address", "Reason", "Responsible", "Category", "SubCategory", "Medical", "Amount"]
-    if os.path.exists(CURRENT_DB_FILE):
-        try:
-            df = pd.read_csv(CURRENT_DB_FILE)
-            for col in expected_cols:
-                if col not in df.columns: df[col] = ""
-            return df
-        except: return pd.DataFrame(columns=expected_cols)
-    return pd.DataFrame(columns=expected_cols)
-
-def save_data(df):
-    df.to_csv(CURRENT_DB_FILE, index=False)
-
-def get_fund_balance(df, fund_category):
-    if df.empty: return 0.0
-    df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-    income = df[(df['Type'] == 'Incoming') & (df['Category'] == fund_category)]['Amount'].sum()
-    expense = df[(df['Type'] == 'Outgoing') & (df['Category'] == fund_category)]['Amount'].sum()
-    return income - expense
-
-# --- HELPER: PIE CHART ---
-def create_pie_chart_image(data_series, title):
-    if data_series.empty: return None
-    plt.figure(figsize=(6, 6))
-    wedges, texts, autotexts = plt.pie(
-        data_series, labels=data_series.index, autopct='%1.1f%%', 
-        startangle=140, colors=plt.cm.Pastel1.colors, textprops={'fontsize': 10}
-    )
-    plt.title(title, fontsize=14, fontweight='bold')
-    img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=400)
-    img_buf.seek(0)
-    plt.close()
-    return Image(img_buf, width=3.2*inch, height=3.2*inch)
-
-# --- ADVANCED PDF GENERATOR ---
-def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
-                 df_member_year, df_global_year, medical_df, header_msg, footer_msg, custom_font_path=None):
-    
-    if not HAS_PDF: return None
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    elements = []
-    styles = getSampleStyleSheet()
-    
-    # Font Registration Logic
-    font_name = 'Helvetica' # Default
-    if custom_font_path:
-        try:
-            pdfmetrics.registerFont(TTFont('CustomFont', custom_font_path))
-            font_name = 'CustomFont'
-        except:
-            pass
-
-    # Custom Styles
-    style_normal = ParagraphStyle(name='CustomNormal', parent=styles['Normal'], fontName=font_name, leading=14)
-    style_title = ParagraphStyle(name='CustomTitle', parent=styles['Title'], fontName='Helvetica-Bold', fontSize=18, textColor=colors.darkgreen, spaceAfter=20)
-    style_highlight = ParagraphStyle(name='Highlight', parent=style_normal, fontSize=12, textColor=colors.darkblue, spaceAfter=12)
-    style_quote = ParagraphStyle(name='Quote', parent=style_normal, fontSize=10, textColor=colors.darkgray, spaceAfter=10, leading=12, fontName=font_name)
-
-    # 1. Title
-    elements.append(Paragraph(f"Member Contribution Report", style_title))
-    
-    # 2. ISLAMIC QUOTES (Bengali)
-    # Only displays correctly if a Bengali font is uploaded
-    elements.append(Paragraph(QURAN_QUOTE, style_quote))
-    elements.append(Paragraph(HADITH_QUOTE, style_quote))
-    elements.append(Spacer(1, 15))
-
-    # 3. Member Profile
-    profile_text = [
-        f"<b>Name:</b> {member_name}",
-        f"<b>Member Since:</b> {member_since}",
-        f"<b>Address:</b> {member_details.get('address', '-')}",
-        f"<b>Phone/Email:</b> {member_details.get('phone', '-')} / {member_details.get('email', '-')}",
-        f"<b>Report Year:</b> {year}"
-    ]
-    for line in profile_text:
-        elements.append(Paragraph(line, style_normal))
-    
-    elements.append(Spacer(1, 10))
-    elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", style_highlight))
-    elements.append(Spacer(1, 15))
-    
-    # 4. Appreciation Box
-    if header_msg:
-        elements.append(Paragraph(f"<i>{header_msg}</i>", style_normal))
-        elements.append(Spacer(1, 15))
-
-    # 5. Table 1: Member's Monthly Contributions
-    elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
-    
-    mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
-    t1_data = [["Month", "Amount"]]
-    t1_total = 0
-    for m_num in range(1, 13):
-        row = mem_monthly[mem_monthly['Month'] == m_num]
-        amt = row['Amount'].sum() if not row.empty else 0.0
-        t1_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
-        t1_total += amt
-    t1_data.append(["TOTAL", f"{t1_total:,.2f}"])
-
-    t1 = Table(t1_data, colWidths=[200, 150], hAlign='LEFT')
-    t1.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.darkgreen),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
-    ]))
-    elements.append(t1)
-    elements.append(Spacer(1, 20))
-
-    # 6. Table 2: Charity Overall Spending
-    elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
-    
-    global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
-    t2_data = [["Month", "Total Distributed"]]
-    t2_total = 0
-    for m_num in range(1, 13):
-        row = global_monthly[global_monthly['Month'] == m_num]
-        amt = row['Amount'].sum() if not row.empty else 0.0
-        t2_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
-        t2_total += amt
-    t2_data.append(["TOTAL", f"{t2_total:,.2f}"])
-
-    t2 = Table(t2_data, colWidths=[200, 150], hAlign='LEFT')
-    t2.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.navy),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 1, colors.black),
-        ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
-    ]))
-    elements.append(t2)
-    elements.append(Spacer(1, 25))
-
-    # 7. Charts Section
-    elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", styles['Heading3']))
-    elements.append(Spacer(1, 10))
-
-    # GENERATE IMAGES
-    fund_stats = df_global_year.groupby("Category")['Amount'].sum()
-    img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
-    usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
-    img_usage = create_pie_chart_image(usage_stats, "By Usage")
-    img_med = None
-    if not medical_df.empty:
-        med_stats = medical_df.groupby("Medical")['Amount'].sum()
-        img_med = create_pie_chart_image(med_stats, "Medical Breakdown")
-
-    # LAYOUT: ROW 1 (Fund | Usage)
-    if img_fund and img_usage:
-        chart_table_1 = Table([[img_fund, img_usage]], colWidths=[3.5*inch, 3.5*inch])
-        chart_table_1.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
-        elements.append(chart_table_1)
-        elements.append(Spacer(1, 15))
-    elif img_fund: elements.append(img_fund)
-    elif img_usage: elements.append(img_usage)
-
-    # LAYOUT: ROW 2 (Medical - Centered)
-    if img_med:
-        chart_table_2 = Table([[img_med]], colWidths=[7*inch])
-        chart_table_2.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
-        elements.append(chart_table_2)
-        elements.append(Spacer(1, 25))
-
-    # 8. Footer & Signature
-    if footer_msg:
-        elements.append(Paragraph(footer_msg, style_normal))
-        elements.append(Spacer(1, 30))
-
-    elements.append(Paragraph("_" * 30, style_normal))
-    elements.append(Paragraph("Authorized Signature", style_normal))
-
-    doc.build(elements)
-    buffer.seek(0)
-    return buffer
-
-if 'df' not in st.session_state:
+# Load data if logged in
+if st.session_state.authenticated and st.session_state.df.empty:
     st.session_state.df = load_data()
-
-if 'members_db' not in st.session_state:
     st.session_state.members_db = load_json_file(MEMBERS_FILE)
+
+df = st.session_state.df
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -308,18 +281,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
     
-    st.markdown("### 🛠️ Admin Tools")
-    
-    # FONT UPLOADER FOR BENGALI
-    st.info("Upload Bengali Font (.ttf) to view Quran/Hadith correctly in PDF.")
-    font_file = st.file_uploader("Upload Font (e.g. Kalpurush.ttf)", type=['ttf'])
-    if font_file:
-        with open(FONT_FILE_NAME, "wb") as f:
-            f.write(font_file.getbuffer())
-        st.session_state.custom_font_path = FONT_FILE_NAME
-        st.success("Font Loaded!")
-    
-    st.divider()
     st.error("⚠️ Danger Zone")
     csv_backup = st.session_state.df.to_csv(index=False).encode('utf-8')
     st.download_button("1️⃣ Download Data First", csv_backup, f"archive_{st.session_state.username}_{datetime.now().strftime('%Y-%m-%d')}.csv", "text/csv")
@@ -327,7 +288,8 @@ with st.sidebar:
     if st.button("2️⃣ Reset All Transactions"):
         st.session_state.show_reset_confirm = True
     
-    if st.session_state.show_reset_confirm:
+    # Safe Reset Logic using .get() to avoid AttributeError
+    if st.session_state.get('show_reset_confirm', False):
         st.warning("Are you sure? This deletes all transactions!")
         c_yes, c_no = st.columns(2)
         if c_yes.button("YES, Delete"):
@@ -352,7 +314,7 @@ with st.sidebar:
 
 # --- DASHBOARD ---
 st.title("Charity Management System")
-df = st.session_state.df
+
 curr_yr = int(datetime.now().year)
 
 if not df.empty:
@@ -407,6 +369,7 @@ with tab1:
     
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
+    # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
     
     if t_type == "Outgoing":
@@ -507,10 +470,14 @@ with tab3:
         if cat != "All": adf = adf[adf['Category'] == cat]
         
         if not adf.empty:
-            # Table View
-            st.dataframe(adf[["Date", "Name_Details", "Group", "Category", "Amount"]], use_container_width=True)
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
-            st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
+            c1, c2 = st.columns([2,1])
+            with c1:
+                fig = px.bar(stats, x="Name_Details", y="Amount", text_auto=True)
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                st.dataframe(stats, hide_index=True, use_container_width=True)
+                st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
         else: st.info("No income data.")
         
         st.divider()
@@ -527,11 +494,12 @@ with tab3:
                 fig_use = px.pie(out_df, values='Amount', names='SubCategory')
                 st.plotly_chart(fig_use, use_container_width=True)
             
+            st.write("**Medical Breakdown**")
             med_df = out_df[out_df['SubCategory'] == 'Medical help']
             if not med_df.empty:
-                st.write("**Medical Breakdown**")
                 fig_med = px.pie(med_df, values='Amount', names='Medical')
                 st.plotly_chart(fig_med, use_container_width=True)
+            else: st.info("No Medical data")
         else: st.info("No donations.")
 
 # === TAB 4: MEMBER REPORT ===
@@ -584,7 +552,6 @@ with tab4:
             st.success(f"**Total for {tyear}: {CURRENCY}{year_total:,.2f}**")
             
             if HAS_PDF:
-                font_path = st.session_state.get('custom_font_path', None)
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
                                    year_df, global_out_year, medical_df_year, h, f)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
@@ -599,11 +566,13 @@ with tab5:
     if sum_year:
         year_df = df[df['Year'] == int(sum_year)]
         monthly_stats = year_df.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
+        
         if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
         if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
         
         summary_table = []
         t_in, t_out, t_bal = 0, 0, 0
+        
         for m_num in range(1, 13):
             inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
             don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
@@ -611,7 +580,8 @@ with tab5:
             summary_table.append({"Month": MONTH_NAMES[m_num-1], "Income": inc, "Donation": don, "Balance": bal})
             t_in += inc; t_out += don; t_bal += bal
             
-        st.dataframe(pd.DataFrame(summary_table).style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
+        sum_df = pd.DataFrame(summary_table)
+        st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
         c1, c2, c3 = st.columns(3)
         c1.metric("Year Income", f"€{t_in:,.2f}")
         c2.metric("Year Donation", f"€{t_out:,.2f}")
