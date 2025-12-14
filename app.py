@@ -23,12 +23,12 @@ try:
 except ImportError:
     HAS_PDF = False
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
 
 USER_FILE = "users.json"
 MEMBERS_FILE = "members.json"
-FONT_FILE_NAME = "custom_font.ttf" 
+FONT_FILE_NAME = "custom_font.ttf"
 CURRENCY = "€"
 
 INCOME_TYPES = ["Sadaka", "Zakat", "Fitra", "Iftar", "Scholarship", "General"]
@@ -41,7 +41,7 @@ MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
 QURAN_QUOTE = """ "The example of those who spend their wealth in the way of Allah is like a seed [of grain] which grows seven spikes, in each spike is a hundred grains. And Allah multiplies [His reward] for whom He wills. And Allah is all-Encompassing and Knowing." (Surah Al-Baqarah 2:261)"""
 HADITH_QUOTE = """The Prophet (peace and blessings of Allah be upon him) said: "Protect yourselves from the Fire, even with half a date." (Sunan an-Nasa'i, 2552)"""
 
-# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
+# --- HELPER FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -64,7 +64,7 @@ def check_login(username, password):
     if username in users and users[username] == hash_password(password): return True
     return False
 
-# --- 3. SESSION INIT ---
+# --- SESSION STATE SETUP ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'show_reset_confirm' not in st.session_state: st.session_state.show_reset_confirm = False
@@ -75,7 +75,6 @@ if 'custom_font_path' not in st.session_state: st.session_state.custom_font_path
 # =========================================================
 if not st.session_state.authenticated:
     st.title("🔒 Charity System Login")
-    
     with st.sidebar:
         st.header("⚙️ Admin Tools")
         if os.path.exists(USER_FILE):
@@ -111,7 +110,7 @@ if not st.session_state.authenticated:
     st.stop()
 
 # =========================================================
-# MAIN APP
+# MAIN APP LOGIC
 # =========================================================
 CURRENT_DB_FILE = get_user_db_file(st.session_state.username)
 
@@ -121,8 +120,10 @@ def load_data():
     if os.path.exists(CURRENT_DB_FILE):
         try:
             df = pd.read_csv(CURRENT_DB_FILE)
+            # FORCE MIGRATION: Ensure all columns exist
             for col in expected_cols:
-                if col not in df.columns: df[col] = ""
+                if col not in df.columns:
+                    df[col] = ""
             return df
         except: return pd.DataFrame(columns=expected_cols)
     return pd.DataFrame(columns=expected_cols)
@@ -133,31 +134,30 @@ def save_data(df):
 def get_fund_balance(df, fund_category, group_filter="All"):
     if df.empty: return 0.0
     df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce').fillna(0)
-    temp_df = df.copy()
+    temp = df.copy()
     if group_filter != "All":
-        temp_df = temp_df[temp_df['Group'] == group_filter]
-    income = temp_df[(temp_df['Type'] == 'Incoming') & (temp_df['Category'] == fund_category)]['Amount'].sum()
-    expense = temp_df[(temp_df['Type'] == 'Outgoing') & (temp_df['Category'] == fund_category)]['Amount'].sum()
+        temp = temp[temp['Group'] == group_filter]
+    income = temp[(temp['Type'] == 'Incoming') & (temp['Category'] == fund_category)]['Amount'].sum()
+    expense = temp[(temp['Type'] == 'Outgoing') & (temp['Category'] == fund_category)]['Amount'].sum()
     return income - expense
 
-# --- HELPER: PIE CHART ---
+# --- CHART GENERATOR ---
 def create_pie_chart_image(data_series, title):
     if data_series.empty: return None
-    plt.figure(figsize=(6, 6))
-    wedges, texts, autotexts = plt.pie(
-        data_series, labels=data_series.index, autopct='%1.1f%%', 
-        startangle=140, colors=plt.cm.Pastel1.colors, textprops={'fontsize': 10}
-    )
-    plt.title(title, fontsize=14, fontweight='bold')
-    img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=300)
-    img_buf.seek(0)
-    plt.close()
-    return Image(img_buf, width=3.2*inch, height=3.2*inch)
+    try:
+        plt.figure(figsize=(6, 6))
+        plt.pie(data_series, labels=data_series.index, autopct='%1.1f%%', startangle=140, colors=plt.cm.Pastel1.colors)
+        plt.title(title, fontsize=14, fontweight='bold')
+        img_buf = io.BytesIO()
+        plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=300)
+        img_buf.seek(0)
+        plt.close()
+        return Image(img_buf, width=3.2*inch, height=3.2*inch)
+    except: return None
 
-# --- ADVANCED PDF GENERATOR ---
+# --- PDF GENERATOR ---
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
-                 df_member_year, df_distributed_year, df_global_year, medical_df, header_msg, footer_msg, custom_font_path=None):
+                 df_member_year, df_global_year, medical_df, header_msg, footer_msg, custom_font_path=None):
     
     if not HAS_PDF: return None
     buffer = io.BytesIO()
@@ -165,13 +165,13 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements = []
     styles = getSampleStyleSheet()
     
-    # 1. SETUP FONTS
+    # Fonts
     font_name = 'Helvetica'
     if custom_font_path and os.path.exists(custom_font_path):
         try:
             pdfmetrics.registerFont(TTFont('Bengali', custom_font_path))
             font_name = 'Bengali'
-        except Exception as e: pass
+        except: pass
 
     # Styles
     style_center = ParagraphStyle(name='Center', parent=styles['Normal'], alignment=TA_CENTER, fontSize=12)
@@ -179,20 +179,20 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     style_normal = ParagraphStyle(name='MyNormal', parent=styles['Normal'], fontName=font_name, leading=14)
     style_bold = ParagraphStyle(name='MyBold', parent=styles['Normal'], fontName='Helvetica-Bold')
     style_highlight = ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12)
-    style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontName=font_name, fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
+    style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
 
-    # 2. HEADER
+    # 1. Header
     elements.append(Paragraph("Bismillah hir Rahmanir Rahim", style_center))
     elements.append(Paragraph("Sadaka Group Berlin", style_title))
-    elements.append(Paragraph("Member Contribution Report", styles['Heading2']))
+    elements.append(Paragraph(f"Member Contribution Report", styles['Heading2']))
     elements.append(Spacer(1, 10))
 
-    # 3. QUOTES
+    # 2. Quotes
     elements.append(Paragraph(QURAN_QUOTE, style_quote))
     elements.append(Paragraph(HADITH_QUOTE, style_quote))
     elements.append(Spacer(1, 15))
 
-    # 4. MEMBER DETAILS
+    # 3. Profile
     profile_text = [
         f"<b>Name:</b> {member_name}",
         f"<b>Member Since:</b> {member_since}",
@@ -207,14 +207,19 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", style_highlight))
     elements.append(Spacer(1, 15))
     
-    # 5. APPRECIATION
     if header_msg:
         elements.append(Paragraph(f"<i>{header_msg}</i>", style_normal))
         elements.append(Spacer(1, 15))
 
-    # 6. TABLE 1: Contributions
+    # 4. Table 1 (Member Contributions)
     elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", style_bold))
-    mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
+    
+    # Aggregation
+    if not df_member_year.empty:
+        mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
+    else:
+        mem_monthly = pd.DataFrame(columns=['Month', 'Amount'])
+
     t1_data = [["Month", "Amount"]]
     t1_total = 0
     for m_num in range(1, 13):
@@ -234,92 +239,66 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # 7. TABLE 2: Donations Distributed by Member (NEW)
-    if not df_distributed_year.empty:
-        elements.append(Paragraph(f"<b>2. Donations Distributed by You in {year}</b>", style_bold))
-        t_dist_data = [["Month", "Beneficiary", "Address", "Reason", "Amount"]]
-        dist_total = 0
+    # 5. Table 2 (Overall)
+    elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year}</b>", style_bold))
+    
+    if not df_global_year.empty:
+        global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
+    else:
+        global_monthly = pd.DataFrame(columns=['Month', 'Amount'])
         
-        # Sort by month
-        df_distributed_year = df_distributed_year.sort_values('Month')
-        
-        for index, row in df_distributed_year.iterrows():
-            m_name = MONTH_NAMES[int(row['Month'])-1]
-            t_dist_data.append([
-                m_name,
-                str(row['Name_Details']),
-                str(row['Address']),
-                str(row['Reason']),
-                f"{row['Amount']:,.2f}"
-            ])
-            dist_total += row['Amount']
-            
-        t_dist_data.append(["", "", "", "TOTAL:", f"{dist_total:,.2f}"])
-        
-        t_dist = Table(t_dist_data, colWidths=[60, 100, 100, 100, 70], hAlign='LEFT')
-        t_dist.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.darkblue),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-            ('GRID', (0,0), (-1,-1), 1, colors.black),
-            ('FONTSIZE', (0,0), (-1,-1), 8),
-            ('ALIGN', (-1,0), (-1,-1), 'RIGHT'),
-        ]))
-        elements.append(t_dist)
-        elements.append(Spacer(1, 20))
-
-    # 8. TABLE 3: Charity Overall Spending
-    elements.append(Paragraph(f"<b>3. Charity Overall Donations in {year} (Impact)</b>", style_bold))
-    global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
-    t3_data = [["Month", "Total Distributed"]]
-    t3_total = 0
+    t2_data = [["Month", "Total Distributed"]]
+    t2_total = 0
     for m_num in range(1, 13):
         row = global_monthly[global_monthly['Month'] == m_num]
         amt = row['Amount'].sum() if not row.empty else 0.0
-        t3_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
-        t3_total += amt
-    t3_data.append(["TOTAL", f"{t3_total:,.2f}"])
+        t2_data.append([MONTH_NAMES[m_num-1], f"{amt:,.2f}"])
+        t2_total += amt
+    t2_data.append(["TOTAL", f"{t2_total:,.2f}"])
 
-    t3 = Table(t3_data, colWidths=[200, 150], hAlign='LEFT')
-    t3.setStyle(TableStyle([
+    t2 = Table(t2_data, colWidths=[200, 150], hAlign='LEFT')
+    t2.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.navy),
         ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
         ('GRID', (0,0), (-1,-1), 1, colors.black),
         ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
     ]))
-    elements.append(t3)
+    elements.append(t2)
     elements.append(Spacer(1, 25))
 
-    # 9. Charts Section
-    elements.append(Paragraph(f"<b>4. Distribution Analysis ({year})</b>", style_bold))
+    # 6. Charts
+    elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", style_bold))
     elements.append(Spacer(1, 10))
 
-    fund_stats = df_global_year.groupby("Category")['Amount'].sum()
-    img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
-    usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
-    img_usage = create_pie_chart_image(usage_stats, "By Usage")
+    # Safety checks for charts
+    img_fund = None
+    if not df_global_year.empty:
+        fund_stats = df_global_year.groupby("Category")['Amount'].sum()
+        img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
     
+    img_usage = None
+    if not df_global_year.empty:
+        usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
+        img_usage = create_pie_chart_image(usage_stats, "By Usage")
+
     img_med = None
-    if not medical_df.empty:
+    if medical_df is not None and not medical_df.empty:
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
         img_med = create_pie_chart_image(med_stats, "Medical Breakdown")
 
-    # Layout: Row 1
+    # Layout
     if img_fund and img_usage:
         chart_table_1 = Table([[img_fund, img_usage]], colWidths=[3.5*inch, 3.5*inch])
         chart_table_1.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
         elements.append(chart_table_1)
         elements.append(Spacer(1, 15))
-    elif img_fund: elements.append(img_fund)
-    elif img_usage: elements.append(img_usage)
-
-    # Layout: Row 2
+    
     if img_med:
         chart_table_2 = Table([[img_med]], colWidths=[7*inch])
         chart_table_2.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
         elements.append(chart_table_2)
         elements.append(Spacer(1, 25))
 
-    # 10. Footer & Signature
     if footer_msg:
         elements.append(Paragraph(footer_msg, style_normal))
         elements.append(Spacer(1, 30))
@@ -346,8 +325,8 @@ with st.sidebar:
     st.divider()
     
     st.markdown("### 🛠️ Admin Tools")
-    st.info("Upload Bengali Font (e.g. Kalpurush.ttf) if needed.")
-    font_file = st.file_uploader("Upload Font (.ttf)", type=['ttf'])
+    st.info("Upload .ttf font if using non-English characters.")
+    font_file = st.file_uploader("Upload Font", type=['ttf'])
     if font_file:
         with open(FONT_FILE_NAME, "wb") as f:
             f.write(font_file.getbuffer())
@@ -418,7 +397,7 @@ for i, fund in enumerate(INCOME_TYPES):
 st.divider()
 
 # --- TABS ---
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["1. Transaction", "2. Activities Log", "3. Donation List", "4. Analysis", "5. Member Report", "6. Overall Summary"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["1. Transaction", "2. Activities Log", "3. Analysis", "4. Member Report", "5. Overall Summary"])
 
 # === TAB 1: TRANSACTION ===
 with tab1:
@@ -454,6 +433,7 @@ with tab1:
     
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
+    # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
     
     if t_type == "Outgoing":
@@ -475,8 +455,8 @@ with tab1:
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
-        member_name, address, reason, responsible = "", "", "", ""
-        category, sub_category, medical, group = "", "", "", ""
+        member_name = ""; address = ""; reason = ""; responsible = ""
+        category = ""; sub_category = ""; medical = ""; group = ""
         
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
@@ -575,27 +555,8 @@ with tab2:
                     save_data(st.session_state.df)
                     st.warning("Deleted!"); st.rerun()
 
-# === TAB 3: DONATION LIST ===
+# === TAB 3: ANALYSIS ===
 with tab3:
-    st.subheader("Donation List (Outgoing)")
-    d_yr = st.selectbox("Year", ["All"] + sorted(list(set(df['Year'].astype(str)))) if not df.empty else ["All"], key="don_yr")
-    d_grp = st.selectbox("Filter Group", ["All", "Brother", "Sister"], key="don_grp")
-    
-    don_df = df[df['Type'] == 'Outgoing'].copy()
-    if d_yr != "All": don_df = don_df[don_df['Year'] == int(d_yr)]
-    if d_grp != "All": don_df = don_df[don_df['Group'] == d_grp]
-    
-    if not don_df.empty:
-        # Convert month number to name for display
-        don_df['Month Name'] = don_df['Month'].apply(lambda x: MONTH_NAMES[int(x)-1] if 0 < int(x) <= 12 else x)
-        
-        st.dataframe(don_df[["Month Name", "Name_Details", "Address", "Reason", "Responsible", "Amount"]], use_container_width=True)
-        st.success(f"**Total Donations: {CURRENCY}{don_df['Amount'].sum():,.2f}**")
-    else:
-        st.info("No donations found.")
-
-# === TAB 4: ANALYSIS ===
-with tab4:
     st.subheader("Analysis")
     c1, c2, c3 = st.columns(3)
     a_grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="an_grp")
@@ -634,8 +595,8 @@ with tab4:
         st.dataframe(an_df[["Date", "Name_Details", "Type", "Category", "Amount"]], use_container_width=True)
     else: st.info("No data.")
 
-# === TAB 5: MEMBER REPORT ===
-with tab5:
+# === TAB 4: MEMBER REPORT ===
+with tab4:
     st.subheader("Member Report")
     c1, c2, c3 = st.columns(3)
     mat_grp = c1.selectbox("Filter Group", ["All", "Brother", "Sister"], key="mg")
@@ -671,47 +632,29 @@ with tab5:
             year_filter = None
             global_out_year = df[df['Type'] == 'Outgoing']
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
-            dist_df = df[(df['Responsible'] == target) & (df['Type'] == 'Outgoing')]
         else:
             year_filter = int(tyear)
             year_df = all_time_df[all_time_df['Year'] == year_filter]
             global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
-            dist_df = df[(df['Responsible'] == target) & (df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
 
-        if not year_df.empty or not dist_df.empty:
-            
-            # Show Contribution Table
-            if not year_df.empty:
-                st.markdown(f"#### 📅 Contributions in {tyear}")
-                st.dataframe(year_df[["Date", "Category", "Amount"]], use_container_width=True)
-                year_total = year_df['Amount'].sum()
-                st.success(f"**Total Contributed: {CURRENCY}{year_total:,.2f}**")
-            
-            # Show Distributed Table
-            if not dist_df.empty:
-                st.markdown(f"#### 🤲 Donations Distributed by {target}")
-                st.dataframe(dist_df[["Date", "Name_Details", "Address", "Reason", "Amount"]], use_container_width=True)
-                dist_total = dist_df['Amount'].sum()
-                st.info(f"**Total Distributed: {CURRENCY}{dist_total:,.2f}**")
+        if not year_df.empty:
+            st.markdown(f"#### 📅 Contributions in {tyear}")
+            st.dataframe(year_df[["Date", "Category", "Amount"]], use_container_width=True)
+            year_total = year_df['Amount'].sum()
+            st.success(f"**Total for {tyear}: {CURRENCY}{year_total:,.2f}**")
             
             if HAS_PDF:
                 font_path = st.session_state.get('custom_font_path', None)
-                # Note: Passing dist_df as a new dataframe for "Donations Distributed"
-                # To support this in PDF, we need to update generate_pdf slightly to accept dist_df
-                # For now, we will reuse the existing logic which already handled 'medical_df' etc.
-                # I will stick to the previous PDF structure as requested to avoid breaking, but using dist_df logic inside generate_pdf would require modifying that function.
-                # Assuming standard request, I will pass dist_df in place of medical_df if medical is empty, or add a slot.
-                # Actually, I updated generate_pdf earlier to handle global data. Let's just generate standard report.
-                
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
                                    year_df, global_out_year, medical_df_year, h, f, font_path)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
-        else: st.info(f"No activity found for {tyear}.")
+            else: st.warning("Install 'reportlab' & 'matplotlib'")
+        else: st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
 
-# === TAB 6: OVERALL SUMMARY ===
-with st.expander("Overall Summary Table"):
+# === TAB 5: OVERALL SUMMARY ===
+with tab5:
     st.subheader("Overall Monthly Summary")
     sum_year = st.selectbox("Select Year for Summary", sorted(list(set(df['Year'].astype(str)))))
     if sum_year:
