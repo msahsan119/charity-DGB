@@ -156,7 +156,6 @@ def create_pie_chart_image(data_series, title):
     return Image(img_buf, width=3.2*inch, height=3.2*inch)
 
 # --- ADVANCED PDF GENERATOR ---
-# FIXED: Added df_summary_year to arguments
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
                  df_member_year, df_donations_year, df_summary_year, medical_df, header_msg, footer_msg, custom_font_path=None):
     
@@ -182,6 +181,10 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     style_highlight = ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12)
     style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
     style_month = ParagraphStyle(name='Month', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, textColor=colors.darkred, spaceBefore=6, spaceAfter=4)
+    
+    # COLORED QUOTE STYLES
+    style_quran = ParagraphStyle(name='Quran', parent=styles['Normal'], fontSize=10, textColor=colors.darkblue, spaceAfter=8, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
+    style_hadith = ParagraphStyle(name='Hadith', parent=styles['Normal'], fontSize=10, textColor=colors.darkgreen, spaceAfter=10, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
 
     # 2. HEADER
     elements.append(Paragraph("Bismillah hir Rahmanir Rahim", style_center))
@@ -190,8 +193,8 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Spacer(1, 10))
 
     # 3. QUOTES
-    elements.append(Paragraph(QURAN_QUOTE, style_quote))
-    elements.append(Paragraph(HADITH_QUOTE, style_quote))
+    elements.append(Paragraph(QURAN_QUOTE, style_quran))
+    elements.append(Paragraph(HADITH_QUOTE, style_hadith))
     elements.append(Spacer(1, 15))
 
     # 4. MEMBER DETAILS
@@ -289,12 +292,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Paragraph(f"<b>3. Group Financial Summary ({grp_name}s) in {year}</b>", style_bold))
     
     t3_data = [["Month", "Income", "Donation", "Balance"]]
-    
-    if df_summary_year.empty:
-         monthly_stats = pd.DataFrame()
-    else:
-        monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
-        
+    monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
     if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
     if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
     
@@ -481,11 +479,19 @@ with tab1:
     st.markdown("---")
     st.write("#### New Entry")
     
+    # EXTERNAL VARIABLES (Defined BEFORE the form)
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
-    # EXTERNAL VARIABLES
-    sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
+    sel_group = "N/A"
+    sel_category = "" 
+    sel_sub_category = "" 
+    sel_medical = "" 
+    out_grp = "N/A" 
+    current_balance = 0.0
+    member_name_sel = ""
+    inc_group_sel = "Brother" # Default for incoming
     
+    # 1. OUTGOING LOGIC OUTSIDE FORM
     if t_type == "Outgoing":
         st.info("ℹ️ Donation Details:")
         col_grp, col_cat = st.columns(2)
@@ -499,28 +505,39 @@ with tab1:
         if sel_sub_category == "Medical help":
             med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
             sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
-    
+
+    # 2. INCOMING LOGIC OUTSIDE FORM (Crucial for filtering)
+    if t_type == "Incoming":
+        st.markdown("#### 📥 Income Details")
+        c1, c2 = st.columns(2)
+        inc_group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True, key="inc_grp_select")
+        
+        # Filter members dynamically
+        valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == inc_group_sel]
+        valid_mems.sort()
+        
+        if valid_mems:
+            member_name_sel = c2.selectbox("Select Member", valid_mems, key="inc_mem_select")
+        else:
+            member_name_sel = c2.text_input("Member Name (Not Registered)", key="inc_mem_text")
+        
+        sel_category = st.selectbox("Category", INCOME_TYPES, key="inc_cat_select")
+        sel_group = inc_group_sel
+
+    # 3. MAIN FORM
     with st.form("txn_form", clear_on_submit=True):
         c_date, c_amt = st.columns(2)
         date_val = c_date.date_input("Date", datetime.today())
         amount = c_amt.number_input(f"Amount ({CURRENCY})", min_value=0.0, step=5.0)
         
+        # Internal placeholders
         member_name, address, reason, responsible = "", "", "", ""
-        category, sub_category, medical, group = "", "", "", ""
         
         if t_type == "Incoming":
-            st.write("#### 📥 Income Details")
-            c1, c2 = st.columns(2)
-            group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True)
-            valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == group_sel]
-            valid_mems.sort()
-            member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
-            category = st.selectbox("Category", INCOME_TYPES)
-            group = group_sel
-            sub_category = ""
-            medical = ""
+            # Just placeholders inside form, actual data comes from outside variables
+            pass 
         else:
-            st.write("#### 📤 Beneficiary & Responsible")
+            # Outgoing specific text inputs
             c1, c2 = st.columns(2)
             member_name = c1.text_input("Beneficiary Name")
             address = c2.text_input("Address")
@@ -528,18 +545,20 @@ with tab1:
             reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            category, sub_category, medical, group = sel_category, sel_sub_category, sel_medical, out_grp
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
+            final_name = member_name_sel if t_type == "Incoming" else member_name
+            final_group = sel_group if t_type == "Incoming" else out_grp
+            
             if t_type == "Outgoing" and amount > current_balance:
-                st.error(f"Insufficient funds in {category}!")
-            elif amount > 0 and member_name:
+                st.error(f"Insufficient funds in {sel_category}!")
+            elif amount > 0 and final_name:
                 new_row = {
                     "ID": str(uuid.uuid4()), "Date": str(date_val), 
                     "Year": int(date_val.year), "Month": int(date_val.month),
-                    "Type": t_type, "Group": group, "Name_Details": member_name, 
+                    "Type": t_type, "Group": final_group, "Name_Details": final_name, 
                     "Address": address, "Reason": reason, "Responsible": responsible,
-                    "Category": category, "SubCategory": sub_category, "Medical": medical, "Amount": amount
+                    "Category": sel_category, "SubCategory": sel_sub_category, "Medical": sel_medical, "Amount": amount
                 }
                 st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
                 save_data(st.session_state.df)
@@ -694,7 +713,7 @@ with tab5:
             year_df = all_time_df
             year_filter = None
             
-            # FIXED LOGIC for PDF
+            # Filter outgoing donations for THIS group
             group_filter = mem_info.get('group', 'All') 
             if group_filter == 'All' and mat_grp != 'All': group_filter = mat_grp
             
@@ -702,9 +721,6 @@ with tab5:
                  global_out_year = df[df['Type'] == 'Outgoing']
             else:
                  global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
-            
-            summary_source_df = df
-            if group_filter != 'All': summary_source_df = df[df['Group'] == group_filter]
                  
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
         else:
@@ -716,12 +732,17 @@ with tab5:
             
             if group_filter == 'All':
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
-                summary_source_df = df[df['Year'] == year_filter]
             else:
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter) & (df['Group'] == group_filter)]
-                summary_source_df = df[(df['Year'] == year_filter) & (df['Group'] == group_filter)]
                 
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
+        
+        # Summary Source Logic
+        summary_source_df = df
+        if group_filter != 'All':
+             summary_source_df = df[df['Group'] == group_filter]
+        if year_filter:
+             summary_source_df = summary_source_df[summary_source_df['Year'] == year_filter]
 
         if not year_df.empty:
             st.markdown(f"#### 📅 Contributions in {tyear}")
