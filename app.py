@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib.enums import TA_CENTER
@@ -156,7 +156,7 @@ def create_pie_chart_image(data_series, title):
     return Image(img_buf, width=3.2*inch, height=3.2*inch)
 
 # --- ADVANCED PDF GENERATOR ---
-# UPDATED: Added df_summary_year to arguments list
+# FIXED: Added df_summary_year to arguments
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
                  df_member_year, df_donations_year, df_summary_year, medical_df, header_msg, footer_msg, custom_font_path=None):
     
@@ -289,8 +289,12 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Paragraph(f"<b>3. Group Financial Summary ({grp_name}s) in {year}</b>", style_bold))
     
     t3_data = [["Month", "Income", "Donation", "Balance"]]
-    # Fixed: Use df_summary_year here
-    monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
+    
+    if df_summary_year.empty:
+         monthly_stats = pd.DataFrame()
+    else:
+        monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
+        
     if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
     if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
     
@@ -323,7 +327,6 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
     usage_stats = df_donations_year.groupby("SubCategory")['Amount'].sum()
     img_usage = create_pie_chart_image(usage_stats, "By Usage")
-    
     img_med = None
     if not medical_df.empty:
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
@@ -691,7 +694,7 @@ with tab5:
             year_df = all_time_df
             year_filter = None
             
-            # FIXED LOGIC FOR ALL YEARS
+            # FIXED LOGIC for PDF
             group_filter = mem_info.get('group', 'All') 
             if group_filter == 'All' and mat_grp != 'All': group_filter = mat_grp
             
