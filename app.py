@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib.enums import TA_CENTER
@@ -156,8 +156,9 @@ def create_pie_chart_image(data_series, title):
     return Image(img_buf, width=3.2*inch, height=3.2*inch)
 
 # --- ADVANCED PDF GENERATOR ---
+# UPDATED: Added df_summary_year to arguments list
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
-                 df_member_year, df_distributed_year, df_global_year, medical_df, header_msg, footer_msg, custom_font_path=None):
+                 df_member_year, df_donations_year, df_summary_year, medical_df, header_msg, footer_msg, custom_font_path=None):
     
     if not HAS_PDF: return None
     buffer = io.BytesIO()
@@ -239,14 +240,14 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     # 7. TABLE 2: DONATION LIST
     elements.append(Paragraph(f"<b>2. Complete Donation List ({grp_name}s) in {year}</b>", style_bold))
     
-    if df_distributed_year.empty:
+    if df_donations_year.empty:
         elements.append(Paragraph("No donations recorded for this period.", style_normal))
     else:
         grand_don_total = 0
-        df_distributed_year = df_distributed_year.sort_values('Month')
+        df_donations_year = df_donations_year.sort_values('Month')
         
         for m_num in range(1, 13):
-            m_df = df_distributed_year[df_distributed_year['Month'] == m_num]
+            m_df = df_donations_year[df_donations_year['Month'] == m_num]
             if not m_df.empty:
                 m_name = MONTH_NAMES[m_num-1]
                 elements.append(Paragraph(f"<b>{m_name}</b>", style_month))
@@ -288,7 +289,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Paragraph(f"<b>3. Group Financial Summary ({grp_name}s) in {year}</b>", style_bold))
     
     t3_data = [["Month", "Income", "Donation", "Balance"]]
-    # Use df_summary_year which is passed correctly
+    # Fixed: Use df_summary_year here
     monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
     if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
     if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
@@ -318,9 +319,9 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Paragraph(f"<b>4. Distribution Analysis ({year})</b>", style_bold))
     elements.append(Spacer(1, 10))
 
-    fund_stats = df_global_year.groupby("Category")['Amount'].sum()
+    fund_stats = df_donations_year.groupby("Category")['Amount'].sum()
     img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
-    usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
+    usage_stats = df_donations_year.groupby("SubCategory")['Amount'].sum()
     img_usage = create_pie_chart_image(usage_stats, "By Usage")
     
     img_med = None
@@ -481,19 +482,8 @@ with tab1:
     
     # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
-    valid_mems = []
-
-    # -- LOGIC FOR OUTSIDE FORM --
-    if t_type == "Incoming":
-         st.info("ℹ️ Income Details:")
-         c_grp_inc, c_dummy = st.columns(2)
-         inc_grp = c_grp_inc.radio("Group Filter", ["Brother", "Sister"], horizontal=True, key="inc_grp_radio")
-         # Calculate valid members based on this selection immediately
-         valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == inc_grp]
-         valid_mems.sort()
-         sel_group = inc_grp # Set group for saving later
-
-    elif t_type == "Outgoing":
+    
+    if t_type == "Outgoing":
         st.info("ℹ️ Donation Details:")
         col_grp, col_cat = st.columns(2)
         out_grp = col_grp.radio("Donation Group:", ["Brother", "Sister"], horizontal=True, key="out_grp")
@@ -507,7 +497,6 @@ with tab1:
             med_choice = st.selectbox("Medical Condition", MEDICAL_SUB_TYPES, key="out_med")
             sel_medical = st.text_input("Specify", key="out_med_txt") if med_choice == "Other" else med_choice
     
-    # -- FORM --
     with st.form("txn_form", clear_on_submit=True):
         c_date, c_amt = st.columns(2)
         date_val = c_date.date_input("Date", datetime.today())
@@ -517,14 +506,18 @@ with tab1:
         category, sub_category, medical, group = "", "", "", ""
         
         if t_type == "Incoming":
-            # Use valid_mems calculated outside
-            c2_in, c3_in = st.columns(2)
-            member_name = c2_in.selectbox("Select Member", valid_mems) if valid_mems else c2_in.text_input("Member Name")
-            category = c3_in.selectbox("Category", INCOME_TYPES)
-            group = sel_group # From outside
+            st.write("#### 📥 Income Details")
+            c1, c2 = st.columns(2)
+            group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True)
+            valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == group_sel]
+            valid_mems.sort()
+            member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
+            category = st.selectbox("Category", INCOME_TYPES)
+            group = group_sel
             sub_category = ""
             medical = ""
         else:
+            st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
             member_name = c1.text_input("Beneficiary Name")
             address = c2.text_input("Address")
@@ -698,7 +691,7 @@ with tab5:
             year_df = all_time_df
             year_filter = None
             
-            # --- FIXED LOGIC ---
+            # FIXED LOGIC FOR ALL YEARS
             group_filter = mem_info.get('group', 'All') 
             if group_filter == 'All' and mat_grp != 'All': group_filter = mat_grp
             
@@ -707,7 +700,6 @@ with tab5:
             else:
                  global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
             
-            # For summary table 3
             summary_source_df = df
             if group_filter != 'All': summary_source_df = df[df['Group'] == group_filter]
                  
