@@ -16,13 +16,14 @@ try:
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
+    from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     HAS_PDF = True
 except ImportError:
     HAS_PDF = False
 
-# --- 1. CONFIGURATION ---
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Charity Management System", layout="wide", page_icon="💚")
 
 USER_FILE = "users.json"
@@ -35,7 +36,7 @@ MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 
-# --- 2. AUTHENTICATION & FILE FUNCTIONS ---
+# --- FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
     return f"data_{clean_name}.csv"
@@ -58,7 +59,7 @@ def check_login(username, password):
     if username in users and users[username] == hash_password(password): return True
     return False
 
-# --- 3. SESSION INIT ---
+# --- SESSION INIT ---
 if 'authenticated' not in st.session_state: st.session_state.authenticated = False
 if 'username' not in st.session_state: st.session_state.username = ""
 if 'show_reset_confirm' not in st.session_state: st.session_state.show_reset_confirm = False
@@ -147,7 +148,7 @@ def create_pie_chart_image(data_series, title):
 
 # --- ADVANCED PDF GENERATOR ---
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
-                 df_member_year, df_global_year, medical_df, detailed_distribution_df, header_msg, footer_msg):
+                 df_member_year, df_global_year, medical_df, expenditure_df, header_msg, footer_msg):
     
     if not HAS_PDF: return None
     buffer = io.BytesIO()
@@ -155,21 +156,22 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements = []
     styles = getSampleStyleSheet()
     
-    # Font Setup (Optional, safe failover)
+    # Try loading Bengali font
+    has_bengali_font = False
     try:
         pdfmetrics.registerFont(TTFont('Kalpurush', 'Kalpurush.ttf'))
-        bengali_style = ParagraphStyle('Bengali', parent=styles['Normal'], fontName='Kalpurush', fontSize=10)
-        has_font = True
+        bengali_style = ParagraphStyle('Bengali', parent=styles['Normal'], fontName='Kalpurush', fontSize=10, leading=14, alignment=TA_JUSTIFY)
+        has_bengali_font = True
     except:
         bengali_style = styles['Normal']
-        has_font = False
 
     styles.add(ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12))
 
-    # 1. Title & Profile
+    # 1. Header
     elements.append(Paragraph(f"Member Contribution Report", styles['Title']))
     elements.append(Spacer(1, 10))
-    
+
+    # 2. Member Profile
     profile_text = [
         f"<b>Name:</b> {member_name}",
         f"<b>Member Since:</b> {member_since}",
@@ -188,7 +190,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
         elements.append(Spacer(1, 15))
 
-    # 2. Table 1: Member's Contributions
+    # 4. Table 1: Member's Monthly Contributions
     elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
     
     mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
@@ -211,8 +213,8 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # 3. Table 2: Overall Monthly Summary
-    elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
+    # 5. Table 2: Charity Overall Spending
+    elements.append(Paragraph(f"<b>2. Charity Overall Summary in {year}</b>", styles['Heading3']))
     
     global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
     t2_data = [["Month", "Total Distributed"]]
@@ -232,40 +234,46 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         ('FONTNAME', (-2,-1), (-1,-1), 'Helvetica-Bold'),
     ]))
     elements.append(t2)
-    elements.append(Spacer(1, 25))
+    elements.append(Spacer(1, 20))
     
-    # 4. Table 3: Detailed Distribution Report (NEW REQUEST)
-    elements.append(Paragraph(f"<b>3. Detailed Distribution Report ({year})</b>", styles['Heading3']))
-    
-    # Headers: Month, Reason, Responsible, Total, Bros, Sis
-    t3_data = [["Month", "Reason", "Responsible", "Total", "Brothers", "Sisters"]]
-    
-    if not detailed_distribution_df.empty:
-        for idx, row in detailed_distribution_df.iterrows():
+    # -------------------------------------------------------------
+    # 5.5 NEW TABLE: Detailed Expenditure Breakdown
+    # -------------------------------------------------------------
+    if not expenditure_df.empty:
+        elements.append(Paragraph(f"<b>3. Detailed Expenditure List ({year})</b>", styles['Heading3']))
+        
+        # Columns: Month, Reason, Responsible, Total, Brother, Sister
+        t3_data = [["Month", "Reason / Detail", "Responsible", "Total", "Bro.", "Sis."]]
+        
+        # We need to loop through the pre-processed dataframe passed to function
+        # Ensure correct sorting by month
+        
+        for index, row in expenditure_df.iterrows():
+            m_name = MONTH_NAMES[int(row['Month'])-1]
             t3_data.append([
-                row['MonthName'],
-                str(row['Reason']),
+                m_name,
+                str(row['Display_Reason'])[:30], # Truncate long reasons
                 str(row['Responsible']),
-                f"{row['Amount']:,.2f}",
-                f"{row['Bro_Amt']:,.2f}",
-                f"{row['Sis_Amt']:,.2f}"
+                f"{row['Total']:,.0f}",
+                f"{row['Brother']:,.0f}",
+                f"{row['Sister']:,.0f}"
             ])
-    else:
-        t3_data.append(["No distribution data", "-", "-", "-", "-", "-"])
+            
+        t3 = Table(t3_data, colWidths=[60, 160, 100, 60, 60, 60])
+        t3.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.darkred),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('FONTSIZE', (0,0), (-1,-1), 8),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.black),
+            ('ALIGN', (3,0), (-1,-1), 'RIGHT'), # Align numbers right
+        ]))
+        elements.append(t3)
+        elements.append(Spacer(1, 20))
 
-    t3 = Table(t3_data, colWidths=[60, 100, 100, 60, 60, 60], hAlign='LEFT')
-    t3.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.darkred),
-        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.black),
-        ('FONTSIZE', (0,0), (-1,-1), 8),
-        ('ALIGN', (3,0), (-1,-1), 'RIGHT'),
-    ]))
-    elements.append(t3)
-    elements.append(Spacer(1, 25))
-
-    # 5. Charts Section
+    # 6. Charts Section
     elements.append(Paragraph(f"<b>4. Distribution Analysis ({year})</b>", styles['Heading3']))
+    elements.append(Spacer(1, 10))
+
     fund_stats = df_global_year.groupby("Category")['Amount'].sum()
     img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
     usage_stats = df_global_year.groupby("SubCategory")['Amount'].sum()
@@ -276,33 +284,33 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
         img_med = create_pie_chart_image(med_stats, "Medical Breakdown")
 
-    # Row 1 Charts
     if img_fund and img_usage:
         chart_table_1 = Table([[img_fund, img_usage]], colWidths=[3.5*inch, 3.5*inch])
         chart_table_1.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER'), ('VALIGN', (0,0), (-1,-1), 'MIDDLE')]))
         elements.append(chart_table_1)
+        elements.append(Spacer(1, 15))
     elif img_fund: elements.append(img_fund)
     elif img_usage: elements.append(img_usage)
 
-    # Row 2 Chart
     if img_med:
-        elements.append(Spacer(1, 10))
         chart_table_2 = Table([[img_med]], colWidths=[7*inch])
         chart_table_2.setStyle(TableStyle([('ALIGN', (0,0), (-1,-1), 'CENTER')]))
         elements.append(chart_table_2)
+        elements.append(Spacer(1, 25))
 
-    # Bengali Quotes (Only if font exists)
-    if has_font:
-        elements.append(Spacer(1, 20))
-        quran = """যারা আল্লাহর পথে নিজেদের মাল ব্যয় করে, তাদের (দানের) তুলনা সেই বীজের মত, যাত্থেকে সাতটি শীষ জন্মিল, প্রত্যেক শীষে একশত করে দানা এবং আল্লাহ যাকে ইচ্ছে করেন, বর্ধিত হারে দিয়ে থাকেন। বস্তুতঃ আল্লাহ প্রাচুর্যের অধিকারী, জ্ঞানময়। (সুরা বাকারাহ ২৬১)"""
-        hadith = """আদী ইব্‌ন হাতিম (রাঃ) থেকে বর্ণিতঃ নবী (সাল্লাল্লাহু ‘আলাইহি ওয়া সাল্লাম) থেকে বর্ণিত। তিনি বলেন তোমরা জাহান্নামের আগুন থেকে বাঁচ (নিজেদের রক্ষা কর) যদিও তা খেজুরের টুকরা দ্বারাও হয়। (সামান্য বস্তু সাদাকা করতে পারলেও তা কর।)"""
-        
-        elements.append(Paragraph(quran, bengali_style))
+    # Bengali Quotes
+    if has_bengali_font:
+        elements.append(Spacer(1, 10))
+        quran_text = """যারা আল্লাহর পথে নিজেদের মাল ব্যয় করে, তাদের (দানের) তুলনা সেই বীজের মত, যাত্থেকে সাতটি শীষ জন্মিল, প্রত্যেক শীষে একশত করে দানা এবং আল্লাহ যাকে ইচ্ছে করেন, বর্ধিত হারে দিয়ে থাকেন। বস্তুতঃ আল্লাহ প্রাচুর্যের অধিকারী, জ্ঞানময়। (সুরা বাকারাহ ২৬১)"""
+        hadith_text = """আদী ইব্‌ন হাতিম (রাঃ) থেকে বর্ণিতঃ নবী (সাল্লাল্লাহু ‘আলাইহি ওয়া সাল্লাম) থেকে বর্ণিত। তিনি বলেন তোমরা জাহান্নামের আগুন থেকে বাঁচ (নিজেদের রক্ষা কর) যদিও তা খেজুরের টুকরা দ্বারাও হয়। (সামান্য বস্তু সাদাকা করতে পারলেও তা কর।) (সুনানে আন-নাসায়ী, হাদিস নং ২৫৫২)"""
+        elements.append(Paragraph("<b>Inspirational Quotes:</b>", styles['Normal']))
+        elements.append(Spacer(1, 5))
+        elements.append(Paragraph(quran_text, bengali_style))
         elements.append(Spacer(1, 8))
-        elements.append(Paragraph(hadith, bengali_style))
+        elements.append(Paragraph(hadith_text, bengali_style))
+        elements.append(Spacer(1, 20))
 
-    # Footer
-    elements.append(Spacer(1, 30))
+    # 7. Footer & Signature
     if footer_msg:
         elements.append(Paragraph(footer_msg, styles['Normal']))
         elements.append(Spacer(1, 30))
@@ -449,6 +457,7 @@ with tab1:
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
             category = st.selectbox("Category", INCOME_TYPES)
             group = group_sel
+            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
@@ -518,6 +527,7 @@ with tab3:
         if cat != "All": adf = adf[adf['Category'] == cat]
         
         if not adf.empty:
+            # Table instead of Chart
             st.dataframe(adf[["Date", "Name_Details", "Group", "Category", "Amount"]], use_container_width=True)
             stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
             st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
@@ -569,42 +579,53 @@ with tab4:
         i2.success(f"**Lifetime Total:** {CURRENCY}{lifetime_total:,.2f}")
         
         with st.container():
-            st.markdown(f"**Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')} | {mem_info.get('email', '-')}")
+            st.markdown(f"**Details:** {mem_info.get('address', '-')} | {mem_info.get('phone', '-')}")
 
         st.divider()
         with st.expander("PDF Options"):
             h = st.text_area("Header", "We appreciate your generous contributions.")
             f = st.text_area("Footer", "Please contact admin for discrepancies.")
 
-        # --- PREPARE DATA FOR PDF ---
         if tyear == "All":
             year_df = all_time_df
-            year_filter = None
             global_out_year = df[df['Type'] == 'Outgoing']
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
-            report_out = df[df['Type'] == 'Outgoing'] # For calculation
         else:
             year_filter = int(tyear)
             year_df = all_time_df[all_time_df['Year'] == year_filter]
             global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
-            report_out = global_out_year
 
-        # CALCULATE DETAILED DISTRIBUTION FOR TABLE 3
-        # We need: Month, Reason, Responsible, Total Amt, Brother Amt, Sister Amt
-        if not report_out.empty:
-            # Map month num to name for display
-            report_out['MonthName'] = report_out['Month'].apply(lambda x: MONTH_NAMES[x-1] if 1 <= x <= 12 else str(x))
+        # --- PREPARE EXPENDITURE SUMMARY FOR PDF ---
+        # We group Outgoing transactions by Month, Reason, Responsible, and Group
+        
+        expenditure_df = pd.DataFrame()
+        if not global_out_year.empty:
+            # Construct display reason
+            global_out_year['Display_Reason'] = global_out_year.apply(
+                lambda x: x['Reason'] if x['Reason'] else f"{x['Category']} - {x['SubCategory']}", axis=1
+            )
             
-            # Helper cols for sums
-            report_out['Bro_Amt'] = report_out.apply(lambda x: x['Amount'] if x['Group'] == 'Brother' else 0, axis=1)
-            report_out['Sis_Amt'] = report_out.apply(lambda x: x['Amount'] if x['Group'] == 'Sister' else 0, axis=1)
+            # Pivot table logic
+            summary_3 = global_out_year.groupby(['Month', 'Display_Reason', 'Responsible', 'Group'])['Amount'].sum().reset_index()
             
-            # Group by
-            dist_summary = report_out.groupby(['Month', 'MonthName', 'Reason', 'Responsible'])[['Amount', 'Bro_Amt', 'Sis_Amt']].sum().reset_index()
-            dist_summary = dist_summary.sort_values('Month') # Sort chronologically
-        else:
-            dist_summary = pd.DataFrame()
+            if not summary_3.empty:
+                expenditure_df = summary_3.pivot_table(
+                    index=['Month', 'Display_Reason', 'Responsible'], 
+                    columns='Group', 
+                    values='Amount', 
+                    aggfunc='sum', 
+                    fill_value=0
+                ).reset_index()
+                
+                # Add Total Column
+                expenditure_df['Total'] = expenditure_df.get('Brother', 0) + expenditure_df.get('Sister', 0)
+                # Ensure Brother/Sister columns exist if missing
+                if 'Brother' not in expenditure_df.columns: expenditure_df['Brother'] = 0
+                if 'Sister' not in expenditure_df.columns: expenditure_df['Sister'] = 0
+                
+                # Sort by Month
+                expenditure_df = expenditure_df.sort_values('Month')
 
         if not year_df.empty:
             st.markdown(f"#### 📅 Contributions in {tyear}")
@@ -613,8 +634,9 @@ with tab4:
             st.success(f"**Total for {tyear}: {CURRENCY}{year_total:,.2f}**")
             
             if HAS_PDF:
+                # UPDATED CALL WITH EXPENDITURE DF
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
-                                   year_df, global_out_year, medical_df_year, dist_summary, h, f)
+                                   year_df, global_out_year, medical_df_year, expenditure_df, h, f)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
         else: st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
@@ -626,24 +648,30 @@ with tab5:
     
     if sum_year:
         year_df = df[df['Year'] == int(sum_year)]
-        monthly_stats = year_df.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
         
-        if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
-        if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
+        sum_tabs = st.tabs(["All", "Brothers", "Sisters"])
         
-        summary_table = []
-        t_in, t_out, t_bal = 0, 0, 0
-        
-        for m_num in range(1, 13):
-            inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
-            don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
-            bal = inc - don
-            summary_table.append({"Month": MONTH_NAMES[m_num-1], "Income": inc, "Donation": don, "Balance": bal})
-            t_in += inc; t_out += don; t_bal += bal
+        def render_summary(dframe):
+            if dframe.empty: return
+            monthly_stats = dframe.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
+            if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
+            if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
             
-        sum_df = pd.DataFrame(summary_table)
-        st.dataframe(sum_df.style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Year Income", f"€{t_in:,.2f}")
-        c2.metric("Year Donation", f"€{t_out:,.2f}")
-        c3.metric("Net Balance", f"€{t_bal:,.2f}")
+            summary_table = []
+            t_in, t_out, t_bal = 0, 0, 0
+            for m_num in range(1, 13):
+                inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
+                don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
+                bal = inc - don
+                summary_table.append({"Month": MONTH_NAMES[m_num-1], "Income": inc, "Donation": don, "Balance": bal})
+                t_in += inc; t_out += don; t_bal += bal
+            
+            st.dataframe(pd.DataFrame(summary_table).style.format({"Income": "€{:.2f}", "Donation": "€{:.2f}", "Balance": "€{:.2f}"}), use_container_width=True)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Year Income", f"€{t_in:,.2f}")
+            c2.metric("Year Donation", f"€{t_out:,.2f}")
+            c3.metric("Net Balance", f"€{t_bal:,.2f}")
+
+        with sum_tabs[0]: render_summary(year_df)
+        with sum_tabs[1]: render_summary(year_df[year_df['Group'] == 'Brother'])
+        with sum_tabs[2]: render_summary(year_df[year_df['Group'] == 'Sister'])
