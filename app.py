@@ -34,6 +34,10 @@ MEDICAL_SUB_TYPES = ["Heart", "Cancer", "Lung", "Brain", "Bone", "Other"]
 MONTH_NAMES = ["January", "February", "March", "April", "May", "June", 
                "July", "August", "September", "October", "November", "December"]
 
+# --- QUOTES ---
+QURAN_QUOTE = """ "The example of those who spend their wealth in the way of Allah is like a seed [of grain] which grows seven spikes, in each spike is a hundred grains. And Allah multiplies [His reward] for whom He wills. And Allah is all-Encompassing and Knowing." (Surah Al-Baqarah 2:261)"""
+HADITH_QUOTE = """The Prophet (peace and blessings of Allah be upon him) said: "Protect yourselves from the Fire, even with half a date." (Sunan an-Nasa'i, 2552)"""
+
 # --- 2. AUTHENTICATION & FILE FUNCTIONS ---
 def get_user_db_file(username):
     clean_name = "".join(x for x in username if x.isalnum())
@@ -158,13 +162,23 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     styles = getSampleStyleSheet()
     
     # Custom Styles
-    styles.add(ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12))
+    style_center = ParagraphStyle(name='Center', parent=styles['Normal'], alignment=TA_CENTER, fontSize=12)
+    style_title = ParagraphStyle(name='BigTitle', parent=styles['Title'], fontSize=20, textColor=colors.darkgreen, spaceAfter=5)
+    style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
+    style_highlight = ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12)
 
-    # 1. Title
-    elements.append(Paragraph(f"Member Contribution Report", styles['Title']))
+    # 1. Header
+    elements.append(Paragraph("Bismillah hir Rahmanir Rahim", style_center))
+    elements.append(Paragraph("Sadaka Group Berlin", style_title))
+    elements.append(Paragraph("Member Contribution Report", styles['Heading2']))
     elements.append(Spacer(1, 10))
 
-    # 2. Member Profile
+    # 2. QUOTES (Restored)
+    elements.append(Paragraph(QURAN_QUOTE, style_quote))
+    elements.append(Paragraph(HADITH_QUOTE, style_quote))
+    elements.append(Spacer(1, 15))
+
+    # 3. Member Profile
     profile_text = [
         f"<b>Name:</b> {member_name}",
         f"<b>Member Since:</b> {member_since}",
@@ -176,16 +190,16 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(Paragraph(line, styles['Normal']))
     
     elements.append(Spacer(1, 10))
-    elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", styles['Highlight']))
+    elements.append(Paragraph(f"<b>LIFETIME CONTRIBUTIONS: {CURRENCY}{lifetime_total:,.2f}</b>", style_highlight))
     elements.append(Spacer(1, 15))
     
+    # 4. Appreciation Box
     if header_msg:
         elements.append(Paragraph(f"<i>{header_msg}</i>", styles['Italic']))
         elements.append(Spacer(1, 15))
 
-    # 4. Table 1: Member's Monthly Contributions
+    # 5. Table 1: Member's Monthly Contributions
     elements.append(Paragraph(f"<b>1. Your Contributions in {year}</b>", styles['Heading3']))
-    
     mem_monthly = df_member_year.groupby('Month')['Amount'].sum().reset_index()
     t1_data = [["Month", "Amount"]]
     t1_total = 0
@@ -206,9 +220,8 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # 5. Table 2: Charity Overall Spending
+    # 6. Table 2: Charity Overall Spending
     elements.append(Paragraph(f"<b>2. Charity Overall Donations in {year} (Impact)</b>", styles['Heading3']))
-    
     global_monthly = df_global_year.groupby('Month')['Amount'].sum().reset_index()
     t2_data = [["Month", "Total Distributed"]]
     t2_total = 0
@@ -229,7 +242,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t2)
     elements.append(Spacer(1, 25))
 
-    # 6. Charts Section
+    # 7. Charts Section
     elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", styles['Heading3']))
     elements.append(Spacer(1, 10))
 
@@ -258,7 +271,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(chart_table_2)
         elements.append(Spacer(1, 25))
 
-    # 7. Footer & Signature
+    # 8. Footer & Signature
     if footer_msg:
         elements.append(Paragraph(footer_msg, styles['Normal']))
         elements.append(Spacer(1, 30))
@@ -356,7 +369,6 @@ with tab1:
     with st.expander("➕ Register New Member / View List", expanded=False):
         c_left, c_right = st.columns([1, 1])
         with c_left:
-            # FIXED: Added clear_on_submit=True to clear form after saving
             with st.form("new_member_form", clear_on_submit=True):
                 nm_id = st.text_input("Member ID (Optional)")
                 nm_name = st.text_input("Full Name *")
@@ -461,57 +473,87 @@ with tab2:
     if f_tp != "All": view = view[view['Type'] == f_tp]
     if f_gr != "All": view = view[view['Group'] == f_gr]
     
-    cols = ["Date", "Type", "Name_Details", "Category", "SubCategory", "Medical", "Address", "Amount"]
-    edited = st.data_editor(view[cols], column_config={"Amount": st.column_config.NumberColumn(format="€%.2f")}, use_container_width=True, num_rows="dynamic", key="log_edit")
+    def get_mem_id(name):
+        return st.session_state.members_db.get(name, {}).get("id", "N/A")
+    view['Member ID'] = view['Name_Details'].apply(get_mem_id)
     
-    if st.button("Save Edits"):
-        if f_yr == "All" and f_tp == "All" and f_gr == "All":
-            st.session_state.df.update(edited)
-            save_data(st.session_state.df)
-            st.success("Updated!")
-            st.rerun()
-        else: st.warning("Reset filters to 'All' to save edits.")
+    st.dataframe(view[["Member ID", "Name_Details", "Type", "Group", "Category", "SubCategory", "Amount"]], use_container_width=True)
+    
+    st.markdown("### ✏️ Edit / Delete Transaction")
+    if not view.empty:
+        view['Label'] = view.apply(lambda x: f"{x['Date']} | {x['Name_Details']} | {CURRENCY}{x['Amount']}", axis=1)
+        txn_map = dict(zip(view['Label'], view['ID']))
+        selected_label = st.selectbox("Select Transaction:", ["None"] + list(txn_map.keys()))
+        
+        if selected_label != "None":
+            sel_id = txn_map[selected_label]
+            row = df[df['ID'] == sel_id].iloc[0]
+            st.info(f"Editing: {selected_label}")
+            with st.form("edit_txn_form"):
+                e_date = st.date_input("Date", datetime.strptime(row['Date'], "%Y-%m-%d"))
+                e_amt = st.number_input("Amount", value=float(row['Amount']))
+                
+                if row['Type'] == "Incoming":
+                    e_cat = st.selectbox("Category", INCOME_TYPES, index=INCOME_TYPES.index(row['Category']) if row['Category'] in INCOME_TYPES else 0)
+                    e_sub = ""; e_med = ""
+                else:
+                    e_cat = st.selectbox("Fund Source", INCOME_TYPES, index=INCOME_TYPES.index(row['Category']) if row['Category'] in INCOME_TYPES else 0)
+                    e_sub = st.selectbox("Usage", OUTGOING_TYPES, index=OUTGOING_TYPES.index(row['SubCategory']) if row['SubCategory'] in OUTGOING_TYPES else 0)
+                    e_med = st.text_input("Medical Details", value=row['Medical'])
+                
+                col_up, col_del = st.columns(2)
+                if col_up.form_submit_button("✅ Update"):
+                    idx = st.session_state.df[st.session_state.df['ID'] == sel_id].index[0]
+                    st.session_state.df.at[idx, 'Date'] = str(e_date)
+                    st.session_state.df.at[idx, 'Year'] = int(e_date.year)
+                    st.session_state.df.at[idx, 'Month'] = int(e_date.month)
+                    st.session_state.df.at[idx, 'Amount'] = e_amt
+                    st.session_state.df.at[idx, 'Category'] = e_cat
+                    st.session_state.df.at[idx, 'SubCategory'] = e_sub
+                    st.session_state.df.at[idx, 'Medical'] = e_med
+                    save_data(st.session_state.df)
+                    st.success("Updated!"); st.rerun()
+                if col_del.form_submit_button("❌ Delete"):
+                    st.session_state.df = st.session_state.df[st.session_state.df['ID'] != sel_id]
+                    save_data(st.session_state.df)
+                    st.warning("Deleted!"); st.rerun()
 
 # === TAB 3: ANALYSIS ===
 with tab3:
     st.subheader("Analysis")
-    if not df.empty:
-        st.markdown("### 📥 Income Analysis")
-        c1, c2 = st.columns(2)
-        grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="a")
-        cat = c2.selectbox("Category", ["All"] + INCOME_TYPES)
-        adf = df[df['Type'] == 'Incoming']
-        if grp != "All": adf = adf[adf['Group'] == grp]
-        if cat != "All": adf = adf[adf['Category'] == cat]
+    c1, c2, c3 = st.columns(3)
+    a_grp = c1.selectbox("Group", ["All", "Brother", "Sister"], key="an_grp")
+    a_yr = c2.selectbox("Year", ["All"] + sorted(list(set(df['Year'].astype(str)))) if not df.empty else ["All"], key="an_yr")
+    
+    an_df = df.copy()
+    if a_grp != "All": an_df = an_df[an_df['Group'] == a_grp]
+    if a_yr != "All": an_df = an_df[an_df['Year'] == int(a_yr)]
+    
+    if not an_df.empty:
+        st.markdown("##### 📅 Month-wise Income vs Outgoing")
+        month_agg = an_df.groupby(['Month', 'Type'])['Amount'].sum().reset_index().sort_values('Month')
+        month_agg['Month Name'] = month_agg['Month'].apply(lambda x: MONTH_NAMES[int(x)-1])
+        fig_bar = px.bar(month_agg, x='Month Name', y='Amount', color='Type', barmode='group')
+        st.plotly_chart(fig_bar, use_container_width=True)
         
-        if not adf.empty:
-            # --- TABLE VIEW INSTEAD OF CHART ---
-            st.dataframe(adf[["Date", "Name_Details", "Group", "Category", "Amount"]], use_container_width=True)
-            stats = adf.groupby("Name_Details")['Amount'].sum().reset_index().sort_values("Amount", ascending=False)
-            st.success(f"Total: {CURRENCY}{stats['Amount'].sum():,.2f}")
-        else: st.info("No income data.")
-        
-        st.divider()
-        st.markdown("### 📤 Donation Analysis")
-        out_df = df[df['Type'] == 'Outgoing']
-        if not out_df.empty:
-            col_fund, col_use = st.columns(2)
-            with col_fund:
-                st.write("**By Fund Source**")
-                fig_fund = px.pie(out_df, values='Amount', names='Category')
-                st.plotly_chart(fig_fund, use_container_width=True)
-            with col_use:
-                st.write("**By Usage**")
-                fig_use = px.pie(out_df, values='Amount', names='SubCategory')
-                st.plotly_chart(fig_use, use_container_width=True)
-            
-            med_df = out_df[out_df['SubCategory'] == 'Medical help']
-            if not med_df.empty:
-                st.write("**Medical Breakdown**")
-                fig_med = px.pie(med_df, values='Amount', names='Medical')
-                st.plotly_chart(fig_med, use_container_width=True)
-            else: st.info("No Medical data")
-        else: st.info("No donations.")
+        st.markdown("---")
+        c_p1, c_p2, c_p3 = st.columns(3)
+        with c_p1:
+            st.write("**📥 Incoming Categories**")
+            idf = an_df[an_df['Type']=='Incoming']
+            if not idf.empty: st.dataframe(idf[["Date", "Name_Details", "Category", "Amount"]], use_container_width=True)
+            else: st.caption("No data")
+        with c_p2:
+            st.write("**📤 Outgoing Usage**")
+            odf = an_df[an_df['Type']=='Outgoing']
+            if not odf.empty: st.plotly_chart(px.pie(odf, values='Amount', names='SubCategory'), use_container_width=True)
+            else: st.caption("No data")
+        with c_p3:
+            st.write("**🏥 Medical Breakdown**")
+            mdf = an_df[(an_df['Type']=='Outgoing') & (an_df['SubCategory']=='Medical help')]
+            if not mdf.empty: st.plotly_chart(px.pie(mdf, values='Amount', names='Medical'), use_container_width=True)
+            else: st.caption("No medical data")
+    else: st.info("No data.")
 
 # === TAB 4: MEMBER REPORT ===
 with tab4:
