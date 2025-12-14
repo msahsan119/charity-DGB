@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 try:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib.enums import TA_CENTER
@@ -143,21 +143,21 @@ def get_fund_balance(df, fund_category, group_filter="All"):
 # --- HELPER: PIE CHART ---
 def create_pie_chart_image(data_series, title):
     if data_series.empty: return None
-    plt.figure(figsize=(5, 5))
+    plt.figure(figsize=(6, 6))
     wedges, texts, autotexts = plt.pie(
         data_series, labels=data_series.index, autopct='%1.1f%%', 
-        startangle=140, colors=plt.cm.Pastel1.colors, textprops={'fontsize': 9}
+        startangle=140, colors=plt.cm.Pastel1.colors, textprops={'fontsize': 10}
     )
-    plt.title(title, fontsize=12, fontweight='bold')
+    plt.title(title, fontsize=14, fontweight='bold')
     img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=300)
+    plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=400)
     img_buf.seek(0)
     plt.close()
-    return Image(img_buf, width=3*inch, height=3*inch)
+    return Image(img_buf, width=3.2*inch, height=3.2*inch)
 
 # --- ADVANCED PDF GENERATOR ---
 def generate_pdf(member_name, member_details, year, member_since, lifetime_total, 
-                 df_member_year, df_donations_year, medical_df, header_msg, footer_msg, custom_font_path=None):
+                 df_member_year, df_donations_year, df_summary_year, medical_df, header_msg, footer_msg, custom_font_path=None):
     
     if not HAS_PDF: return None
     buffer = io.BytesIO()
@@ -179,8 +179,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     style_normal = ParagraphStyle(name='MyNormal', parent=styles['Normal'], fontName=font_name, leading=14)
     style_bold = ParagraphStyle(name='MyBold', parent=styles['Normal'], fontName='Helvetica-Bold')
     style_highlight = ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12)
-    style_quran = ParagraphStyle(name='Quran', parent=styles['Normal'], fontSize=10, textColor=colors.darkblue, spaceAfter=8, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
-    style_hadith = ParagraphStyle(name='Hadith', parent=styles['Normal'], fontSize=10, textColor=colors.darkgreen, spaceAfter=10, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
+    style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
     style_month = ParagraphStyle(name='Month', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, textColor=colors.darkred, spaceBefore=6, spaceAfter=4)
 
     # 2. HEADER
@@ -190,11 +189,12 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Spacer(1, 10))
 
     # 3. QUOTES
-    elements.append(Paragraph(QURAN_QUOTE, style_quran))
-    elements.append(Paragraph(HADITH_QUOTE, style_hadith))
+    elements.append(Paragraph(QURAN_QUOTE, style_quote))
+    elements.append(Paragraph(HADITH_QUOTE, style_quote))
     elements.append(Spacer(1, 15))
 
     # 4. MEMBER DETAILS
+    grp_name = member_details.get('group', 'Group')
     profile_text = [
         f"<b>Name:</b> {member_name}",
         f"<b>Member Since:</b> {member_since}",
@@ -236,16 +236,12 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(t1)
     elements.append(Spacer(1, 20))
 
-    # 7. TABLE 2: DONATION LIST (MONTH WISE)
-    # Filter donations by the group of the member (or all if member group is unknown)
-    # Using df_donations_year passed to function
-    
-    elements.append(Paragraph(f"<b>2. Donation List ({year})</b>", style_bold))
+    # 7. TABLE 2: DONATION LIST
+    elements.append(Paragraph(f"<b>2. Complete Donation List ({grp_name}s) in {year}</b>", style_bold))
     
     if df_donations_year.empty:
         elements.append(Paragraph("No donations recorded for this period.", style_normal))
     else:
-        # Loop through months
         grand_don_total = 0
         df_donations_year = df_donations_year.sort_values('Month')
         
@@ -253,13 +249,12 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
             m_df = df_donations_year[df_donations_year['Month'] == m_num]
             if not m_df.empty:
                 m_name = MONTH_NAMES[m_num-1]
-                elements.append(Paragraph(f"{m_name}", style_month))
+                elements.append(Paragraph(f"<b>{m_name}</b>", style_month))
                 
-                # Table Data for this month
-                m_data = [["Beneficiary", "Address", "Reason", "Responsible", "Amount"]]
+                t_dist_data = [["Beneficiary", "Address", "Reason", "Responsible", "Amount"]]
                 m_total = 0
                 for _, row in m_df.iterrows():
-                    m_data.append([
+                    t_dist_data.append([
                         str(row['Name_Details']),
                         str(row['Address']),
                         str(row['Reason']),
@@ -268,14 +263,12 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
                     ])
                     m_total += row['Amount']
                 
-                # Monthly Total Row
-                m_data.append(["", "", "", "Month Total:", f"{m_total:,.2f}"])
+                t_dist_data.append(["", "", "", "Total:", f"{m_total:,.2f}"])
                 grand_don_total += m_total
                 
-                # Create Table
-                t_mon = Table(m_data, colWidths=[100, 100, 100, 90, 60], hAlign='LEFT')
-                t_mon.setStyle(TableStyle([
-                    ('BACKGROUND', (0,0), (-1,0), colors.navy),
+                t_dist = Table(t_dist_data, colWidths=[100, 100, 100, 90, 60], hAlign='LEFT')
+                t_dist.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.darkred),
                     ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                     ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
                     ('FONTSIZE', (0,0), (-1,-1), 8),
@@ -283,26 +276,54 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
                     ('ALIGN', (-1,0), (-1,-1), 'RIGHT'),
                     ('ALIGN', (0,0), (3,-1), 'LEFT'),
                 ]))
-                elements.append(t_mon)
+                elements.append(t_dist)
                 elements.append(Spacer(1, 10))
         
-        # Grand Total of Donations
         elements.append(Spacer(1, 5))
-        elements.append(Paragraph(f"<b>TOTAL DONATIONS ({year}): {CURRENCY}{grand_don_total:,.2f}</b>", style_highlight))
+        elements.append(Paragraph(f"<b>TOTAL DONATIONS: {CURRENCY}{grand_don_total:,.2f}</b>", style_highlight))
     
     elements.append(Spacer(1, 20))
 
-    # 8. CHARTS SECTION
-    elements.append(Paragraph(f"<b>3. Distribution Analysis ({year})</b>", style_bold))
+    # 8. TABLE 3: GROUP MONTHLY SUMMARY
+    elements.append(Paragraph(f"<b>3. Group Financial Summary ({grp_name}s) in {year}</b>", style_bold))
+    
+    # Prepare summary data from df_summary_year
+    t3_data = [["Month", "Income", "Donation", "Balance"]]
+    
+    # Ensure all 12 months are present
+    monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
+    if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
+    if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
+    
+    for m_num in range(1, 13):
+        inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
+        don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
+        bal = inc - don
+        t3_data.append([
+            MONTH_NAMES[m_num-1],
+            f"{inc:,.2f}",
+            f"{don:,.2f}",
+            f"{bal:,.2f}"
+        ])
+
+    t3 = Table(t3_data, colWidths=[120, 100, 100, 100], hAlign='LEFT')
+    t3.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.navy),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+        ('GRID', (0,0), (-1,-1), 1, colors.black),
+        ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+    ]))
+    elements.append(t3)
+    elements.append(Spacer(1, 25))
+
+    # 9. CHARTS
+    elements.append(Paragraph(f"<b>4. Distribution Analysis ({year})</b>", style_bold))
     elements.append(Spacer(1, 10))
 
-    # Generate Chart Data from Donation DF
     fund_stats = df_donations_year.groupby("Category")['Amount'].sum()
-    usage_stats = df_donations_year.groupby("SubCategory")['Amount'].sum()
-    
     img_fund = create_pie_chart_image(fund_stats, "By Fund Source")
+    usage_stats = df_donations_year.groupby("SubCategory")['Amount'].sum()
     img_usage = create_pie_chart_image(usage_stats, "By Usage")
-    
     img_med = None
     if not medical_df.empty:
         med_stats = medical_df.groupby("Medical")['Amount'].sum()
@@ -324,7 +345,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         elements.append(chart_table_2)
         elements.append(Spacer(1, 25))
 
-    # 9. Footer & Signature
+    # 10. Footer & Signature
     if footer_msg:
         elements.append(Paragraph(footer_msg, style_normal))
         elements.append(Spacer(1, 30))
@@ -459,6 +480,7 @@ with tab1:
     
     t_type = st.radio("Select Type:", ["Incoming", "Outgoing"], horizontal=True, key="t_select")
     
+    # EXTERNAL VARIABLES
     sel_group = "N/A"; sel_category = ""; sel_sub_category = ""; sel_medical = ""; out_grp = "N/A"; current_balance = 0.0
     
     if t_type == "Outgoing":
@@ -668,15 +690,22 @@ with tab5:
         if tyear == "All":
             year_df = all_time_df
             year_filter = None
-            # Filter outgoing donations for THIS group
-            group_filter = mem_info.get('group', 'All')
+            
+            # --- FIXED LOGIC ---
+            # Filter donations where this specific group (Brother/Sister) was the recipient
+            group_filter = mem_info.get('group', 'All') # e.g. "Brother"
             if group_filter == 'All' and mat_grp != 'All': group_filter = mat_grp
             
             if group_filter == 'All':
-                 global_out_year = df[df['Type'] == 'Outgoing']
+                global_out_year = df[df['Type'] == 'Outgoing']
             else:
-                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
-                 
+                global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
+            
+            # Summary for this year (All months)
+            summary_source_df = df
+            if group_filter != 'All':
+                summary_source_df = df[df['Group'] == group_filter]
+                
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
         else:
             year_filter = int(tyear)
@@ -687,9 +716,11 @@ with tab5:
             
             if group_filter == 'All':
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
+                summary_source_df = df[df['Year'] == year_filter]
             else:
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter) & (df['Group'] == group_filter)]
-                
+                summary_source_df = df[(df['Year'] == year_filter) & (df['Group'] == group_filter)]
+
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
 
         if not year_df.empty:
@@ -701,7 +732,7 @@ with tab5:
             if HAS_PDF:
                 font_path = st.session_state.get('custom_font_path', None)
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
-                                   year_df, global_out_year, medical_df_year, h, f, font_path)
+                                   year_df, global_out_year, summary_source_df, medical_df_year, h, f, font_path)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
         else: st.info(f"No contributions found for {tyear}.")
     else: st.info("No members found.")
