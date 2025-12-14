@@ -179,8 +179,11 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     style_normal = ParagraphStyle(name='MyNormal', parent=styles['Normal'], fontName=font_name, leading=14)
     style_bold = ParagraphStyle(name='MyBold', parent=styles['Normal'], fontName='Helvetica-Bold')
     style_highlight = ParagraphStyle(name='Highlight', parent=styles['Normal'], fontSize=12, textColor=colors.darkblue, spaceAfter=12)
-    style_quote = ParagraphStyle(name='Quote', parent=styles['Normal'], fontSize=9, textColor=colors.darkgray, spaceAfter=10, leading=12, leftIndent=20, rightIndent=20)
     style_month = ParagraphStyle(name='Month', parent=styles['Normal'], fontName='Helvetica-Bold', fontSize=10, textColor=colors.darkred, spaceBefore=6, spaceAfter=4)
+    
+    # COLORED QUOTE STYLES
+    style_quran = ParagraphStyle(name='Quran', parent=styles['Normal'], fontSize=10, textColor=colors.darkblue, spaceAfter=8, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
+    style_hadith = ParagraphStyle(name='Hadith', parent=styles['Normal'], fontSize=10, textColor=colors.darkgreen, spaceAfter=10, leading=14, leftIndent=20, rightIndent=20, fontName='Helvetica-Oblique')
 
     # 2. HEADER
     elements.append(Paragraph("Bismillah hir Rahmanir Rahim", style_center))
@@ -189,8 +192,8 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     elements.append(Spacer(1, 10))
 
     # 3. QUOTES
-    elements.append(Paragraph(QURAN_QUOTE, style_quote))
-    elements.append(Paragraph(HADITH_QUOTE, style_quote))
+    elements.append(Paragraph(QURAN_QUOTE, style_quran))  # Blue
+    elements.append(Paragraph(HADITH_QUOTE, style_hadith)) # Green
     elements.append(Spacer(1, 15))
 
     # 4. MEMBER DETAILS
@@ -287,10 +290,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
     # 8. TABLE 3: GROUP MONTHLY SUMMARY
     elements.append(Paragraph(f"<b>3. Group Financial Summary ({grp_name}s) in {year}</b>", style_bold))
     
-    # Prepare summary data from df_summary_year
     t3_data = [["Month", "Income", "Donation", "Balance"]]
-    
-    # Ensure all 12 months are present
     monthly_stats = df_summary_year.groupby(['Month', 'Type'])['Amount'].sum().unstack(fill_value=0)
     if 'Incoming' not in monthly_stats: monthly_stats['Incoming'] = 0.0
     if 'Outgoing' not in monthly_stats: monthly_stats['Outgoing'] = 0.0
@@ -299,12 +299,7 @@ def generate_pdf(member_name, member_details, year, member_since, lifetime_total
         inc = monthly_stats.loc[m_num, 'Incoming'] if m_num in monthly_stats.index else 0
         don = monthly_stats.loc[m_num, 'Outgoing'] if m_num in monthly_stats.index else 0
         bal = inc - don
-        t3_data.append([
-            MONTH_NAMES[m_num-1],
-            f"{inc:,.2f}",
-            f"{don:,.2f}",
-            f"{bal:,.2f}"
-        ])
+        t3_data.append([MONTH_NAMES[m_num-1], f"{inc:,.2f}", f"{don:,.2f}", f"{bal:,.2f}"])
 
     t3 = Table(t3_data, colWidths=[120, 100, 100, 100], hAlign='LEFT')
     t3.setStyle(TableStyle([
@@ -508,14 +503,21 @@ with tab1:
         if t_type == "Incoming":
             st.write("#### 📥 Income Details")
             c1, c2 = st.columns(2)
-            group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True)
-            valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == group_sel]
+            # FIX: Ensure unique key for the group radio button inside the form (or rely on state)
+            # Note: We are using a fresh radio here.
+            inc_group_sel = c1.radio("Group Filter", ["Brother", "Sister"], horizontal=True, key="inc_grp_sel_form")
+            
+            # Filter members
+            valid_mems = [n for n, d in st.session_state.members_db.items() if d.get('group') == inc_group_sel]
             valid_mems.sort()
+            
             member_name = c2.selectbox("Select Member", valid_mems) if valid_mems else c2.text_input("Member Name")
             category = st.selectbox("Category", INCOME_TYPES)
-            group = group_sel
+            group = inc_group_sel
+            
             sub_category = ""
             medical = ""
+            
         else:
             st.write("#### 📤 Beneficiary & Responsible")
             c1, c2 = st.columns(2)
@@ -525,7 +527,12 @@ with tab1:
             reason = c3.text_input("Reason")
             all_mems = sorted(list(st.session_state.members_db.keys()))
             responsible = c4.selectbox("Responsible Person", ["Select..."] + all_mems)
-            category, sub_category, medical, group = sel_category, sel_sub_category, sel_medical, out_grp
+            
+            # Map external to internal variables
+            category = sel_category
+            sub_category = sel_sub_category
+            medical = sel_medical
+            group = out_grp
         
         if st.form_submit_button("💾 Save Transaction", type="primary"):
             if t_type == "Outgoing" and amount > current_balance:
@@ -692,20 +699,14 @@ with tab5:
             year_filter = None
             
             # --- FIXED LOGIC ---
-            # Filter donations where this specific group (Brother/Sister) was the recipient
-            group_filter = mem_info.get('group', 'All') # e.g. "Brother"
+            group_filter = mem_info.get('group', 'All') 
             if group_filter == 'All' and mat_grp != 'All': group_filter = mat_grp
             
             if group_filter == 'All':
-                global_out_year = df[df['Type'] == 'Outgoing']
+                 global_out_year = df[df['Type'] == 'Outgoing']
             else:
-                global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
-            
-            # Summary for this year (All months)
-            summary_source_df = df
-            if group_filter != 'All':
-                summary_source_df = df[df['Group'] == group_filter]
-                
+                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Group'] == group_filter)]
+                 
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
         else:
             year_filter = int(tyear)
@@ -716,12 +717,19 @@ with tab5:
             
             if group_filter == 'All':
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter)]
-                summary_source_df = df[df['Year'] == year_filter]
             else:
                 global_out_year = df[(df['Type'] == 'Outgoing') & (df['Year'] == year_filter) & (df['Group'] == group_filter)]
-                summary_source_df = df[(df['Year'] == year_filter) & (df['Group'] == group_filter)]
-
+                
             medical_df_year = global_out_year[global_out_year['SubCategory'] == 'Medical help']
+        
+        # Determine Summary Data for Table 3
+        # If 'Brother' is selected, summary should be for Brothers only
+        summary_source_df = df
+        if group_filter != 'All':
+             summary_source_df = df[df['Group'] == group_filter]
+        if year_filter:
+             summary_source_df = summary_source_df[summary_source_df['Year'] == year_filter]
+
 
         if not year_df.empty:
             st.markdown(f"#### 📅 Contributions in {tyear}")
@@ -731,6 +739,7 @@ with tab5:
             
             if HAS_PDF:
                 font_path = st.session_state.get('custom_font_path', None)
+                # Pass summary_source_df to PDF for Table 3
                 pdf = generate_pdf(target, mem_info, tyear, mem_since, lifetime_total, 
                                    year_df, global_out_year, summary_source_df, medical_df_year, h, f, font_path)
                 st.download_button("📄 Download Official PDF Report", pdf, f"{target}_Report_{tyear}.pdf", "application/pdf", type="primary")
